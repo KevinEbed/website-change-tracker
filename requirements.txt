@@ -2,4 +2,3 @@ streamlit
 selenium
 python-dotenv
 requests
-chromedriver-autoinstaller
