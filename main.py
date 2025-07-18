@@ -21,7 +21,7 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 # Target website URL
-URL = "https://example.com"
+URL = "https://www.stwdo.de/wohnen/aktuelle-wohnangebote"
 
 # Optional: Path to EdgeDriver executable
 EDGE_DRIVER_PATH = "msedgedriver.exe"
