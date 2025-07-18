@@ -11,21 +11,23 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 
+# Auto-install ChromeDriver
 chromedriver_autoinstaller.install()
 
-# Load environment variables
+# Load environment variables from .env
 load_dotenv()
 
-TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID = st.secrets["TELEGRAM_CHAT_ID"]
-EMAIL_SENDER = st.secrets["EMAIL_SENDER"]
-EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
-EMAIL_RECEIVER = st.secrets["EMAIL_RECEIVER"]
+# Credentials from environment
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
-
+# Website to monitor
 URL = "https://www.stwdo.de/wohnen/aktuelle-wohnangebote"
-EDGE_DRIVER_PATH = "msedgedriver.exe"
 
+# Scrape website content
 def get_website_content(url):
     options = ChromeOptions()
     options.add_argument("--headless")
@@ -38,15 +40,17 @@ def get_website_content(url):
     driver.quit()
     return content
 
-
+# Hash the website content
 def hash_content(content):
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
+# Send message to Telegram
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     requests.post(url, data=data)
 
+# Send email
 def send_email(subject, message):
     msg = MIMEMultipart()
     msg["From"] = EMAIL_SENDER
@@ -59,9 +63,12 @@ def send_email(subject, message):
 
 # Streamlit UI
 st.title("🌐 Website Change Tracker")
+
+# Store previous hash in session
 if "prev_hash" not in st.session_state:
     st.session_state.prev_hash = None
 
+# Trigger check
 if st.button("Check Website for Changes"):
     try:
         content = get_website_content(URL)
