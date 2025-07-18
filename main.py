@@ -3,6 +3,7 @@ import hashlib
 import requests
 import smtplib
 import streamlit as st
+from bs4 import BeautifulSoup
 import chromedriver_autoinstaller
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -29,16 +30,10 @@ URL = "https://www.stwdo.de/wohnen/aktuelle-wohnangebote"
 
 # Scrape website content
 def get_website_content(url):
-    options = ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    service = ChromeService()
-    driver = webdriver.Chrome(service=service, options=options)
-    driver.get(url)
-    content = driver.page_source
-    driver.quit()
-    return content
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.content, "html.parser")
+    return soup.prettify()
 
 # Hash the website content
 def hash_content(content):
