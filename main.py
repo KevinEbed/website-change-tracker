@@ -16,11 +16,12 @@ chromedriver_autoinstaller.install()
 # Load environment variables
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+TELEGRAM_CHAT_ID = st.secrets["TELEGRAM_CHAT_ID"]
+EMAIL_SENDER = st.secrets["EMAIL_SENDER"]
+EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
+EMAIL_RECEIVER = st.secrets["EMAIL_RECEIVER"]
+
 
 URL = "https://www.stwdo.de/wohnen/aktuelle-wohnangebote"
 EDGE_DRIVER_PATH = "msedgedriver.exe"
