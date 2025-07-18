@@ -3,12 +3,15 @@ import hashlib
 import requests
 import smtplib
 import streamlit as st
+import chromedriver_autoinstaller
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.options import Options as ChromeOptions
+
+chromedriver_autoinstaller.install()
 
 # Load environment variables
 load_dotenv()
