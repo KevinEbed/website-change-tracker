@@ -7,8 +7,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 from selenium import webdriver
-from selenium.webdriver.edge.options import Options as EdgeOptions
-from selenium.webdriver.edge.service import Service as EdgeService
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.chrome.options import Options as ChromeOptions
 
 # Load environment variables
 load_dotenv()
@@ -23,15 +23,17 @@ URL = "https://www.stwdo.de/wohnen/aktuelle-wohnangebote"
 EDGE_DRIVER_PATH = "msedgedriver.exe"
 
 def get_website_content(url):
-    options = EdgeOptions()
+    options = ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
-    service = EdgeService(executable_path=EDGE_DRIVER_PATH)
-    driver = webdriver.Edge(service=service, options=options)
+    options.add_argument("--no-sandbox")
+    service = ChromeService()
+    driver = webdriver.Chrome(service=service, options=options)
     driver.get(url)
     content = driver.page_source
     driver.quit()
     return content
+
 
 def hash_content(content):
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
