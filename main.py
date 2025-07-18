@@ -1,33 +1,26 @@
 import os
-import time
 import hashlib
-import smtplib
 import requests
-from selenium import webdriver
-from selenium.webdriver.edge.service import Service as EdgeService
-from selenium.webdriver.edge.options import Options as EdgeOptions
-from dotenv import load_dotenv
+import smtplib
+import streamlit as st
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from dotenv import load_dotenv
+from selenium import webdriver
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.edge.service import Service as EdgeService
 
 # Load environment variables
 load_dotenv()
 
-# Load credentials from .env
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
-# Target website URL
 URL = "https://www.stwdo.de/wohnen/aktuelle-wohnangebote"
-
-# Optional: Path to EdgeDriver executable
 EDGE_DRIVER_PATH = "msedgedriver.exe"
-
-# Initialize previous hash
-previous_hash = None
 
 def get_website_content(url):
     options = EdgeOptions()
@@ -58,30 +51,25 @@ def send_email(subject, message):
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
         server.send_message(msg)
 
-def main():
-    global previous_hash
-    print("🔄 Monitoring started...")
+# Streamlit UI
+st.title("🌐 Website Change Tracker")
+if "prev_hash" not in st.session_state:
+    st.session_state.prev_hash = None
 
-    while True:
-        try:
-            content = get_website_content(URL)
-            current_hash = hash_content(content)
+if st.button("Check Website for Changes"):
+    try:
+        content = get_website_content(URL)
+        current_hash = hash_content(content)
 
-            if previous_hash is None:
-                previous_hash = current_hash
-                print("✅ First content loaded. Hash stored.")
-            elif current_hash != previous_hash:
-                print("⚠️ Change detected!")
-                previous_hash = current_hash
-                send_telegram_message("⚠️ Change detected on the website!")
-                send_email("Website Change Detected", "⚠️ A change was detected on the monitored website.")
-            else:
-                print("✅ No change detected.")
-
-        except Exception as e:
-            print(f"❌ Error: {e}")
-
-        time.sleep(300)  # Wait 5 minutes
-
-if __name__ == "__main__":
-    main()
+        if st.session_state.prev_hash is None:
+            st.session_state.prev_hash = current_hash
+            st.success("✅ First load done. Hash saved.")
+        elif current_hash != st.session_state.prev_hash:
+            st.warning("⚠️ Change Detected!")
+            st.session_state.prev_hash = current_hash
+            send_telegram_message("⚠️ Change detected on the website!")
+            send_email("Website Change Detected", "A change was detected on the monitored website.")
+        else:
+            st.info("✅ No change detected.")
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
