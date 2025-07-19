@@ -8,6 +8,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 from streamlit_autorefresh import st_autorefresh
+from datetime import datetime
 
 # Load environment variables from .env
 load_dotenv()
@@ -55,11 +56,18 @@ st_autorefresh(interval=300000, key="refresh")  # 5 minutes = 300,000 ms
 
 # Streamlit UI
 st.title("🌐 Website Change Tracker")
+st.markdown("⏳ Monitoring for changes every **5 minutes**...")
+
+# Show current timestamp
+now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+st.markdown(f"🕒 Last checked: `{now}`")
 
 # Store previous hash in session
 if "prev_hash" not in st.session_state:
     st.session_state.prev_hash = None
 
+# Visual loading spinner
+with st.spinner("Checking website for changes..."):
     try:
         content = get_website_content(URL)
         current_hash = hash_content(content)
@@ -76,3 +84,6 @@ if "prev_hash" not in st.session_state:
             st.info("✅ No change detected.")
     except Exception as e:
         st.error(f"❌ Error: {e}")
+
+# Visual heartbeat indicator
+st.markdown("💓 *App is running and refreshing automatically.*")
