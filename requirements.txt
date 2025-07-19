@@ -1,7 +1,3 @@
-streamlit
-chromedriver-autoinstaller
-beautifulsoup4
-selenium
-python-dotenv
-streamlit-autorefresh
+flask
 requests
+python-dotenv
