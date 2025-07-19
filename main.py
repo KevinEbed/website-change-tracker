@@ -4,16 +4,9 @@ import requests
 import smtplib
 import streamlit as st
 from bs4 import BeautifulSoup
-import chromedriver_autoinstaller
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.chrome.options import Options as ChromeOptions
-
-# Auto-install ChromeDriver
-chromedriver_autoinstaller.install()
 
 # Load environment variables from .env
 load_dotenv()
