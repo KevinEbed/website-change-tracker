@@ -26,30 +26,32 @@ class URL(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     link = db.Column(db.String(500), nullable=False)
     monitoring = db.Column(db.Boolean, default=False)
+    interval = db.Column(db.Integer, default=60)
 
 with app.app_context():
     db.create_all()
-
-# Dictionary to store thread control flags
-monitor_flags = {}
 
 HTML_TEMPLATE = '''
 <!doctype html>
 <title>URL Monitor</title>
 <h2>Enter URL to monitor:</h2>
 <form method=post>
-  <input type=text name=link size=60>
+  <input type=text name=link size=60 placeholder="Enter URL">
+  <input type=number name=interval min=10 value=60 placeholder="Interval in seconds">
   <input type=submit value=Add>
 </form>
 <ul>
 {% for url in urls %}
-  <li>{{ url.link }} -
+  <li>
+    {{ url.link }} - 
+    Interval: {{ url.interval }}s - 
     {% if url.monitoring %}
-      <strong>Monitoring</strong> |
-      <a href="/stop/{{ url.id }}">Stop Monitoring</a>
+      <strong>Monitoring</strong> 
+      <a href="/stop/{{ url.id }}">[Stop]</a>
     {% else %}
-      <a href="/start/{{ url.id }}">Start Monitoring</a>
+      <a href="/start/{{ url.id }}">[Start Monitoring]</a>
     {% endif %}
+    <a href="/delete/{{ url.id }}" style="color:red;">[Delete]</a>
   </li>
 {% endfor %}
 </ul>
@@ -80,8 +82,10 @@ def send_telegram(message):
     except Exception as e:
         print(f"[ERROR] Failed to send Telegram message: {e}")
 
+monitoring_threads = {}
+
 def monitor_website(url, url_id, interval):
-    print(f"👀 Monitoring {url}")
+    print(f"👀 Monitoring {url} every {interval} seconds")
     try:
         response = requests.get(url)
         old_hash = hashlib.md5(response.content).hexdigest()
@@ -89,8 +93,12 @@ def monitor_website(url, url_id, interval):
         print(f"[ERROR] Failed to fetch initial content: {e}")
         return
 
-    monitor_flags[url_id] = True
-    while monitor_flags.get(url_id):
+    while True:
+        url_entry = URL.query.get(url_id)
+        if not url_entry or not url_entry.monitoring:
+            print(f"[INFO] Stopped monitoring {url}")
+            break
+
         try:
             time.sleep(interval)
             response = requests.get(url)
@@ -105,14 +113,14 @@ def monitor_website(url, url_id, interval):
                 print(f"[DEBUG] No change at {datetime.now()}")
         except Exception as e:
             print(f"[ERROR] Error during monitoring: {e}")
-    print(f"[INFO] Monitoring stopped for {url}")
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
     if request.method == 'POST':
         link = request.form['link']
+        interval = int(request.form.get('interval', 60))
         if link:
-            new_url = URL(link=link)
+            new_url = URL(link=link, interval=interval)
             db.session.add(new_url)
             db.session.commit()
     urls = URL.query.all()
@@ -124,8 +132,9 @@ def start_monitoring(url_id):
     if not url_entry.monitoring:
         url_entry.monitoring = True
         db.session.commit()
-        thread = threading.Thread(target=monitor_website, args=(url_entry.link, url_id, 60), daemon=True)
+        thread = threading.Thread(target=monitor_website, args=(url_entry.link, url_id, url_entry.interval), daemon=True)
         thread.start()
+        monitoring_threads[url_id] = thread
     return redirect('/')
 
 @app.route('/stop/<int:url_id>')
@@ -133,7 +142,13 @@ def stop_monitoring(url_id):
     url_entry = URL.query.get_or_404(url_id)
     url_entry.monitoring = False
     db.session.commit()
-    monitor_flags[url_id] = False  # This will stop the loop
+    return redirect('/')
+
+@app.route('/delete/<int:url_id>')
+def delete_url(url_id):
+    url_entry = URL.query.get_or_404(url_id)
+    db.session.delete(url_entry)
+    db.session.commit()
     return redirect('/')
 
 if __name__ == '__main__':
