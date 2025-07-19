@@ -60,6 +60,9 @@ def send_telegram_notification(url):
 # Monitoring function
 def monitor_website(site_id, url, interval, stop_event):
     print(f"👀 Monitoring {url}")
+    print(f"[DEBUG] Current hash: {current_hash}")
+    print(f"[DEBUG] Previous hash: {prev_hash}")
+
     prev_hash = None
 
     while not stop_event.is_set():
