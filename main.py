@@ -58,35 +58,26 @@ def send_telegram_notification(url):
         print(f"❌ Telegram error: {e}")
 
 # Monitoring function
-def monitor_website(site_id, url, interval, stop_event):
-    print(f"👀 Monitoring {url}")
-    print(f"[DEBUG] Current hash: {current_hash}")
-    print(f"[DEBUG] Previous hash: {prev_hash}")
-
+def monitor_website(id, url, interval):
     prev_hash = None
-
-    while not stop_event.is_set():
+    print(f"👀 Monitoring {url}")
+    while id in monitored_sites:
         try:
             response = requests.get(url, timeout=10)
             content = response.text
-            current_hash = hashlib.md5(content.encode()).hexdigest()
-
-            if prev_hash is None:
-                prev_hash = current_hash
-            elif current_hash != prev_hash:
-                send_email_notification(url)
-                send_telegram_notification(url)
-                prev_hash = current_hash
-
-            site = MonitoredSite.query.get(site_id)
-            if site:
-                site.last_checked = datetime.utcnow()
-                db.session.commit()
-
-            time.sleep(interval)
+            current_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            
+            print(f"[DEBUG] Current hash: {current_hash}")
+            print(f"[DEBUG] Previous hash: {prev_hash}")
+            
+            if prev_hash and current_hash != prev_hash:
+                print(f"🔔 Change detected on {url}")
+                send_email_alert(url)
+                send_telegram_alert(url)
+            prev_hash = current_hash
         except Exception as e:
-            print(f"❌ Error monitoring {url}: {e}")
-            break
+            print(f"[ERROR] Monitoring failed for {url}: {e}")
+        time.sleep(interval)
 
 # Home route
 @app.route('/', methods=['GET', 'POST'])
