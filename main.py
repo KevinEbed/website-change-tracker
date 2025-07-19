@@ -85,11 +85,6 @@ def monitor_website(site_id, url, interval, stop_event):
             print(f"❌ Error monitoring {url}: {e}")
             break
 
-# Create DB
-@app.before_first_request
-def setup():
-    db.create_all()
-
 # Home route
 @app.route('/', methods=['GET', 'POST'])
 def home():
@@ -200,7 +195,8 @@ TEMPLATE = '''
 </table>
 '''
 
-# Run
+# Run the app and create the DB
 if __name__ == '__main__':
+    db.create_all()  # <-- Create tables before starting the app
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
