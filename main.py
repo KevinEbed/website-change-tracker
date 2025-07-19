@@ -1,11 +1,6 @@
 from flask import Flask, request, redirect, render_template_string
 from flask_sqlalchemy import SQLAlchemy
-import requests
-import hashlib
-import os
-import smtplib
-import threading
-import time
+import requests, hashlib, os, smtplib, threading, time
 from datetime import datetime
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
@@ -18,12 +13,13 @@ EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# Flask setup
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///monitored_sites.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# DB Model
+# Database model
 class MonitoredSite(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     url = db.Column(db.String(200), unique=True, nullable=False)
@@ -31,9 +27,9 @@ class MonitoredSite(db.Model):
     is_active = db.Column(db.Boolean, default=False)
     last_checked = db.Column(db.DateTime)
 
-# Thread Management
-monitoring_threads = {}  # {id: {"thread": t, "stop": Event()}}
+monitoring_threads = {}  # site_id: {"thread": t, "stop": Event()}
 
+# Notifications
 def send_email_notification(url):
     subject = "🔔 Website Change Detected"
     body = f"The content at {url} has changed."
@@ -48,22 +44,20 @@ def send_email_notification(url):
             server.send_message(msg)
         print("📧 Email sent!")
     except Exception as e:
-        print(f"❌ Email failed: {e}")
+        print(f"❌ Email error: {e}")
 
 def send_telegram_notification(url):
-    message = f"🔔 Change detected at {url}"
     try:
+        message = f"🔔 Change detected at {url}"
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             data={"chat_id": TELEGRAM_CHAT_ID, "text": message}
         )
-        if response.status_code == 200:
-            print("📩 Telegram sent!")
-        else:
-            print("⚠️ Telegram failed.")
+        print("📩 Telegram sent!" if response.ok else "⚠️ Telegram failed.")
     except Exception as e:
         print(f"❌ Telegram error: {e}")
 
+# Monitoring function
 def monitor_website(site_id, url, interval, stop_event):
     print(f"👀 Monitoring {url}")
     prev_hash = None
@@ -77,7 +71,6 @@ def monitor_website(site_id, url, interval, stop_event):
             if prev_hash is None:
                 prev_hash = current_hash
             elif current_hash != prev_hash:
-                print("🚨 Change Detected!")
                 send_email_notification(url)
                 send_telegram_notification(url)
                 prev_hash = current_hash
@@ -89,13 +82,15 @@ def monitor_website(site_id, url, interval, stop_event):
 
             time.sleep(interval)
         except Exception as e:
-            print(f"❌ Monitoring error: {e}")
+            print(f"❌ Error monitoring {url}: {e}")
             break
 
+# Create DB
 @app.before_first_request
 def setup():
     db.create_all()
 
+# Home route
 @app.route('/', methods=['GET', 'POST'])
 def home():
     message = ""
@@ -116,10 +111,11 @@ def home():
     sites = MonitoredSite.query.all()
     return render_template_string(TEMPLATE, message=message, sites=sites)
 
+# Start Monitoring
 @app.route('/start/<int:site_id>')
 def start_monitoring(site_id):
     site = MonitoredSite.query.get_or_404(site_id)
-    if site.is_active:
+    if site.is_active or site_id in monitoring_threads:
         return redirect('/')
 
     stop_event = threading.Event()
@@ -130,6 +126,7 @@ def start_monitoring(site_id):
     db.session.commit()
     return redirect('/')
 
+# Stop Monitoring
 @app.route('/stop/<int:site_id>')
 def stop_monitoring(site_id):
     if site_id in monitoring_threads:
@@ -141,6 +138,7 @@ def stop_monitoring(site_id):
     db.session.commit()
     return redirect('/')
 
+# Delete
 @app.route('/delete/<int:site_id>')
 def delete_site(site_id):
     stop_monitoring(site_id)
@@ -149,7 +147,17 @@ def delete_site(site_id):
     db.session.commit()
     return redirect('/')
 
-# HTML Template with table
+# Update (Optional)
+@app.route('/update/<int:site_id>', methods=['POST'])
+def update_site(site_id):
+    site = MonitoredSite.query.get_or_404(site_id)
+    new_interval = int(request.form['interval'])
+
+    site.interval = new_interval
+    db.session.commit()
+    return redirect('/')
+
+# HTML Template
 TEMPLATE = '''
 <!doctype html>
 <title>Website Change Detector</title>
@@ -171,7 +179,12 @@ TEMPLATE = '''
 <tr>
   <td>{{ site.id }}</td>
   <td>{{ site.url }}</td>
-  <td>{{ site.interval }}</td>
+  <td>
+    <form action="/update/{{ site.id }}" method="post" style="display:inline;">
+      <input type="number" name="interval" value="{{ site.interval }}" min="10" max="3600" style="width:60px;">
+      <button type="submit">💾</button>
+    </form>
+  </td>
   <td>{{ '✅ Active' if site.is_active else '❌ Inactive' }}</td>
   <td>{{ site.last_checked or 'Never' }}</td>
   <td>
@@ -187,6 +200,7 @@ TEMPLATE = '''
 </table>
 '''
 
+# Run
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
