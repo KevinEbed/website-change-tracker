@@ -1,2 +1,6 @@
+streamlit
+chromedriver-autoinstaller
 beautifulsoup4
+selenium
+python-dotenv
 requests
