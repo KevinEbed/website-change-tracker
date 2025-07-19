@@ -9,7 +9,6 @@ from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
-import datetime
 import random
 
 # Load environment variables from .env
@@ -53,25 +52,26 @@ def send_email(subject, message):
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
         server.send_message(msg)
 
-# Auto-refresh every 5 minutes
-st_autorefresh(interval=300000, key="refresh")  # 5 minutes = 300,000 ms
-
-st.title("🌐 Website Change Tracker")
-st.caption(f"⏱️ Last checked: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-heartbeat = random.choice(["🟢", "🟡", "🟣", "🔵", "🟠"])
-st.markdown(f"### Status: {heartbeat} Monitoring every 5 minutes...")
-st.write(f"🔁 Refresh count: {st.session_state.refresh_count}")
-
-# Show current timestamp
-now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-st.markdown(f"🕒 Last checked: `{now}`")
-
-# Store previous hash in session
+# Initialize session state variables
 if "prev_hash" not in st.session_state:
     st.session_state.prev_hash = None
+if "refresh_count" not in st.session_state:
+    st.session_state.refresh_count = 0
 
-# Visual loading spinner
-with st.spinner("Checking website for changes..."):
+# Auto-refresh every 5 minutes
+st_autorefresh(interval=300000, key="refresh")  # 5 minutes = 300,000 ms
+st.session_state.refresh_count += 1
+
+# App UI
+st.title("🌐 Website Change Tracker")
+now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+heartbeat = random.choice(["🟢", "🟡", "🟣", "🔵", "🟠"])
+st.markdown(f"### {heartbeat} Monitoring every 5 minutes")
+st.markdown(f"🕒 **Last checked:** `{now}`")
+st.markdown(f"🔁 **Refresh count:** `{st.session_state.refresh_count}`")
+
+# Check for changes with loading spinner
+with st.spinner("🔍 Checking website for changes..."):
     try:
         content = get_website_content(URL)
         current_hash = hash_content(content)
@@ -83,11 +83,11 @@ with st.spinner("Checking website for changes..."):
             st.warning("⚠️ Change Detected!")
             st.session_state.prev_hash = current_hash
             send_telegram_message("⚠️ Change detected on the website!")
-            send_email("Website Change Detected", "A change was detected on the monitored website.")
+            send_email("Website Change Detected", f"A change was detected at {now}.\n\nURL: {URL}")
         else:
             st.info("✅ No change detected.")
     except Exception as e:
-        st.error(f"❌ Error: {e}")
+        st.error(f"❌ Error occurred: {e}")
 
-# Visual heartbeat indicator
-st.markdown("💓 *App is running and refreshing automatically.*")
+# Final status
+st.markdown("💓 *This app is running and will check the website every 5 minutes automatically.*")
