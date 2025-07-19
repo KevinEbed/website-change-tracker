@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
+from streamlit_autorefresh import st_autorefresh
 
 # Load environment variables from .env
 load_dotenv()
@@ -49,6 +50,9 @@ def send_email(subject, message):
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
         server.send_message(msg)
 
+# Auto-refresh every 5 minutes
+st_autorefresh(interval=300000, key="refresh")  # 5 minutes = 300,000 ms
+
 # Streamlit UI
 st.title("🌐 Website Change Tracker")
 
@@ -56,8 +60,6 @@ st.title("🌐 Website Change Tracker")
 if "prev_hash" not in st.session_state:
     st.session_state.prev_hash = None
 
-# Trigger check
-if st.button("Check Website for Changes"):
     try:
         content = get_website_content(URL)
         current_hash = hash_content(content)
