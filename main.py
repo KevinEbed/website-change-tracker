@@ -1,14 +1,12 @@
-import streamlit as st
+from flask import Flask, request, render_template_string
 import requests
 import hashlib
-import time
 import os
-from dotenv import load_dotenv
 import smtplib
+import threading
+import time
 from email.mime.text import MIMEText
-
-port = int(os.environ.get("PORT", 8501))
-os.environ["STREAMLIT_SERVER_PORT"] = str(port)
+from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
@@ -18,12 +16,23 @@ EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-st.set_page_config(page_title="Website Change Detector", layout="centered")
-st.title("🌐 Website Change Detector")
+app = Flask(__name__)
 
-url = st.text_input("Enter the URL to monitor:", value="", placeholder="https://example.com")
+monitoring_threads = {}
 
-refresh_interval = st.number_input("Check every (seconds)", min_value=10, max_value=3600, value=60)
+HTML_TEMPLATE = '''
+<!doctype html>
+<title>Website Change Detector</title>
+<h2>🌐 Website Change Detector</h2>
+<form method=post>
+  <label>Enter URL to monitor:</label><br>
+  <input type=text name=url size=50 required placeholder="https://example.com"><br><br>
+  <label>Check every (seconds):</label><br>
+  <input type=number name=interval min=10 max=3600 value=60><br><br>
+  <input type=submit value='Start Monitoring'>
+</form>
+<p>{{ message }}</p>
+'''
 
 def send_email_notification(url):
     subject = "🔔 Website Change Detected"
@@ -37,9 +46,9 @@ def send_email_notification(url):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
             server.send_message(msg)
-        st.success("📧 Email notification sent!")
+        print("📧 Email notification sent!")
     except Exception as e:
-        st.error(f"❌ Email failed: {e}")
+        print(f"❌ Email failed: {e}")
 
 def send_telegram_notification(url):
     message = f"🔔 Change detected at {url}"
@@ -49,16 +58,15 @@ def send_telegram_notification(url):
             data={"chat_id": TELEGRAM_CHAT_ID, "text": message}
         )
         if response.status_code == 200:
-            st.success("📩 Telegram notification sent!")
+            print("📩 Telegram notification sent!")
         else:
-            st.warning("⚠️ Telegram message failed to send.")
+            print("⚠️ Telegram message failed.")
     except Exception as e:
-        st.error(f"❌ Telegram error: {e}")
+        print(f"❌ Telegram error: {e}")
 
-if url.strip() != "":
-    placeholder = st.empty()
+def monitor_website(url, interval):
+    print(f"👀 Starting monitoring: {url} every {interval} seconds.")
     prev_hash = None
-    refresh_count = 0
 
     while True:
         try:
@@ -68,21 +76,33 @@ if url.strip() != "":
 
             if prev_hash is None:
                 prev_hash = current_hash
-                placeholder.success("✅ Monitoring started. Waiting for changes...")
-
             elif current_hash != prev_hash:
-                st.error("🚨 Change Detected!")
+                print("🚨 Change detected!")
                 send_email_notification(url)
                 send_telegram_notification(url)
                 prev_hash = current_hash
-            else:
-                placeholder.info(f"🔁 Refresh count: {refresh_count + 1}")
-
-            refresh_count += 1
-            time.sleep(refresh_interval)
-
+            time.sleep(interval)
         except Exception as e:
-            st.error(f"❌ Error while checking the website: {e}")
+            print(f"❌ Error checking website {url}: {e}")
             break
-else:
-    st.info("ℹ️ Please enter a URL above to begin monitoring.")
+
+@app.route('/', methods=['GET', 'POST'])
+def home():
+    message = ""
+    if request.method == 'POST':
+        url = request.form['url']
+        interval = int(request.form['interval'])
+
+        if url not in monitoring_threads:
+            thread = threading.Thread(target=monitor_website, args=(url, interval), daemon=True)
+            thread.start()
+            monitoring_threads[url] = thread
+            message = f"✅ Monitoring started for {url} every {interval} seconds."
+        else:
+            message = "⚠️ This URL is already being monitored."
+
+    return render_template_string(HTML_TEMPLATE, message=message)
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))  # Change port here if needed
+    app.run(host='0.0.0.0', port=port, debug=True)
