@@ -54,9 +54,11 @@ def send_email(subject, message):
 # Auto-refresh every 5 minutes
 st_autorefresh(interval=300000, key="refresh")  # 5 minutes = 300,000 ms
 
-# Streamlit UI
 st.title("🌐 Website Change Tracker")
-st.markdown("⏳ Monitoring for changes every **5 minutes**...")
+st.caption(f"⏱️ Last checked: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+heartbeat = random.choice(["🟢", "🟡", "🟣", "🔵", "🟠"])
+st.markdown(f"### Status: {heartbeat} Monitoring every 5 minutes...")
+st.write(f"🔁 Refresh count: {st.session_state.refresh_count}")
 
 # Show current timestamp
 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
