@@ -1,7 +1,7 @@
 requests
 python-dotenv
 gunicorn
-Flask
+Flask>=2.0.0
 Flask_SQLAlchemy
 
 
