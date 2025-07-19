@@ -197,6 +197,8 @@ TEMPLATE = '''
 
 # Run the app and create the DB
 if __name__ == '__main__':
-    db.create_all()  # <-- Create tables before starting the app
+    with app.app_context():
+        db.create_all()  # <-- Create tables before starting the app
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
