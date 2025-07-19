@@ -9,6 +9,8 @@ from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
+import datetime
+import random
 
 # Load environment variables from .env
 load_dotenv()
