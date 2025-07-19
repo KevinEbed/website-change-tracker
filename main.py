@@ -31,30 +31,54 @@ class URL(db.Model):
 with app.app_context():
     db.create_all()
 
+monitoring_threads = {}
+
 HTML_TEMPLATE = '''
 <!doctype html>
-<title>URL Monitor</title>
-<h2>Enter URL to monitor:</h2>
-<form method=post>
-  <input type=text name=link size=60 placeholder="Enter URL">
-  <input type=number name=interval min=10 value=60 placeholder="Interval in seconds">
-  <input type=submit value=Add>
-</form>
-<ul>
-{% for url in urls %}
-  <li>
-    {{ url.link }} - 
-    Interval: {{ url.interval }}s - 
-    {% if url.monitoring %}
-      <strong>Monitoring</strong> 
-      <a href="/stop/{{ url.id }}">[Stop]</a>
-    {% else %}
-      <a href="/start/{{ url.id }}">[Start Monitoring]</a>
-    {% endif %}
-    <a href="/delete/{{ url.id }}" style="color:red;">[Delete]</a>
-  </li>
-{% endfor %}
-</ul>
+<html lang="en">
+<head>
+    <title>URL Monitor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-5">
+    <h2 class="mb-4 text-center">🌐 Website Change Monitor</h2>
+    <form method="post" class="row g-3 mb-4">
+        <div class="col-md-6">
+            <input type="text" name="link" class="form-control" placeholder="Enter URL" required>
+        </div>
+        <div class="col-md-3">
+            <input type="number" name="interval" class="form-control" placeholder="Check every (sec)" required min="10">
+        </div>
+        <div class="col-md-3">
+            <button type="submit" class="btn btn-primary w-100">➕ Add URL</button>
+        </div>
+    </form>
+    <ul class="list-group">
+        {% for url in urls %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+            <div>
+                <strong>{{ url.link }}</strong> — every {{ url.interval }}s
+                {% if url.monitoring %}
+                    <span class="badge bg-success ms-2">Monitoring</span>
+                {% else %}
+                    <span class="badge bg-secondary ms-2">Idle</span>
+                {% endif %}
+            </div>
+            <div>
+                {% if url.monitoring %}
+                    <a href="/stop/{{ url.id }}" class="btn btn-warning btn-sm">⛔ Stop</a>
+                {% else %}
+                    <a href="/start/{{ url.id }}" class="btn btn-success btn-sm">▶️ Start</a>
+                {% endif %}
+                <a href="/delete/{{ url.id }}" class="btn btn-danger btn-sm">🗑 Delete</a>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+</body>
+</html>
 '''
 
 def send_email(subject, body):
@@ -82,10 +106,8 @@ def send_telegram(message):
     except Exception as e:
         print(f"[ERROR] Failed to send Telegram message: {e}")
 
-monitoring_threads = {}
-
 def monitor_website(url, url_id, interval):
-    print(f"👀 Monitoring {url} every {interval} seconds")
+    print(f"👀 Monitoring {url}")
     try:
         response = requests.get(url)
         old_hash = hashlib.md5(response.content).hexdigest()
@@ -94,10 +116,11 @@ def monitor_website(url, url_id, interval):
         return
 
     while True:
-        url_entry = URL.query.get(url_id)
-        if not url_entry or not url_entry.monitoring:
-            print(f"[INFO] Stopped monitoring {url}")
-            break
+        with app.app_context():
+            url_obj = URL.query.get(url_id)
+            if not url_obj or not url_obj.monitoring:
+                print(f"[INFO] Monitoring stopped for {url}")
+                break
 
         try:
             time.sleep(interval)
@@ -118,8 +141,8 @@ def monitor_website(url, url_id, interval):
 def home():
     if request.method == 'POST':
         link = request.form['link']
-        interval = int(request.form.get('interval', 60))
-        if link:
+        interval = int(request.form['interval'])
+        if link and interval:
             new_url = URL(link=link, interval=interval)
             db.session.add(new_url)
             db.session.commit()
@@ -133,8 +156,8 @@ def start_monitoring(url_id):
         url_entry.monitoring = True
         db.session.commit()
         thread = threading.Thread(target=monitor_website, args=(url_entry.link, url_id, url_entry.interval), daemon=True)
-        thread.start()
         monitoring_threads[url_id] = thread
+        thread.start()
     return redirect('/')
 
 @app.route('/stop/<int:url_id>')
@@ -147,6 +170,8 @@ def stop_monitoring(url_id):
 @app.route('/delete/<int:url_id>')
 def delete_url(url_id):
     url_entry = URL.query.get_or_404(url_id)
+    if url_entry.monitoring:
+        url_entry.monitoring = False
     db.session.delete(url_entry)
     db.session.commit()
     return redirect('/')
