@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 import smtplib
 from email.mime.text import MIMEText
 
+port = int(os.environ.get("PORT", 8501))
+os.environ["STREAMLIT_SERVER_PORT"] = str(port)
+
 # Load environment variables
 load_dotenv()
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
