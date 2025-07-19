@@ -30,6 +30,9 @@ class URL(db.Model):
 with app.app_context():
     db.create_all()
 
+# Dictionary to store thread control flags
+monitor_flags = {}
+
 HTML_TEMPLATE = '''
 <!doctype html>
 <title>URL Monitor</title>
@@ -40,7 +43,14 @@ HTML_TEMPLATE = '''
 </form>
 <ul>
 {% for url in urls %}
-  <li>{{ url.link }} - {% if url.monitoring %}<strong>Monitoring</strong>{% else %}<a href="/start/{{ url.id }}">Start Monitoring</a>{% endif %}</li>
+  <li>{{ url.link }} -
+    {% if url.monitoring %}
+      <strong>Monitoring</strong> |
+      <a href="/stop/{{ url.id }}">Stop Monitoring</a>
+    {% else %}
+      <a href="/start/{{ url.id }}">Start Monitoring</a>
+    {% endif %}
+  </li>
 {% endfor %}
 </ul>
 '''
@@ -79,7 +89,8 @@ def monitor_website(url, url_id, interval):
         print(f"[ERROR] Failed to fetch initial content: {e}")
         return
 
-    while True:
+    monitor_flags[url_id] = True
+    while monitor_flags.get(url_id):
         try:
             time.sleep(interval)
             response = requests.get(url)
@@ -94,6 +105,7 @@ def monitor_website(url, url_id, interval):
                 print(f"[DEBUG] No change at {datetime.now()}")
         except Exception as e:
             print(f"[ERROR] Error during monitoring: {e}")
+    print(f"[INFO] Monitoring stopped for {url}")
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
@@ -109,9 +121,19 @@ def home():
 @app.route('/start/<int:url_id>')
 def start_monitoring(url_id):
     url_entry = URL.query.get_or_404(url_id)
-    url_entry.monitoring = True
+    if not url_entry.monitoring:
+        url_entry.monitoring = True
+        db.session.commit()
+        thread = threading.Thread(target=monitor_website, args=(url_entry.link, url_id, 60), daemon=True)
+        thread.start()
+    return redirect('/')
+
+@app.route('/stop/<int:url_id>')
+def stop_monitoring(url_id):
+    url_entry = URL.query.get_or_404(url_id)
+    url_entry.monitoring = False
     db.session.commit()
-    threading.Thread(target=monitor_website, args=(url_entry.link, url_id, 60), daemon=True).start()
+    monitor_flags[url_id] = False  # This will stop the loop
     return redirect('/')
 
 if __name__ == '__main__':
