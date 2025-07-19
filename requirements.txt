@@ -1,6 +1,8 @@
-flask
 requests
 python-dotenv
 gunicorn
-flask_sqlalchemy
+Flask
+Flask_SQLAlchemy
+
+
 
