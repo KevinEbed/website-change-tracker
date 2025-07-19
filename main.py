@@ -1,93 +1,85 @@
-import os
-import hashlib
-import requests
-import smtplib
 import streamlit as st
-from bs4 import BeautifulSoup
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
+import hashlib
+import time
+import os
 from dotenv import load_dotenv
-from streamlit_autorefresh import st_autorefresh
-from datetime import datetime
-import random
+import smtplib
+from email.mime.text import MIMEText
 
-# Load environment variables from .env
+# Load environment variables
 load_dotenv()
-
-# Credentials from environment
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Website to monitor
-URL = "https://www.stwdo.de/wohnen/aktuelle-wohnangebote"
+st.set_page_config(page_title="Website Change Detector", layout="centered")
+st.title("🌐 Website Change Detector")
 
-# Scrape website content
-def get_website_content(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.content, "html.parser")
-    return soup.prettify()
+url = st.text_input("Enter the URL to monitor:", value="", placeholder="https://example.com")
 
-# Hash the website content
-def hash_content(content):
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+refresh_interval = st.number_input("Check every (seconds)", min_value=10, max_value=3600, value=60)
 
-# Send message to Telegram
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    requests.post(url, data=data)
-
-# Send email
-def send_email(subject, message):
-    msg = MIMEMultipart()
+def send_email_notification(url):
+    subject = "🔔 Website Change Detected"
+    body = f"The content at {url} has changed."
+    msg = MIMEText(body)
+    msg["Subject"] = subject
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
-    msg["Subject"] = subject
-    msg.attach(MIMEText(message, "plain"))
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        server.send_message(msg)
 
-# Initialize session state variables
-if "prev_hash" not in st.session_state:
-    st.session_state.prev_hash = None
-if "refresh_count" not in st.session_state:
-    st.session_state.refresh_count = 0
-
-# Auto-refresh every 5 minutes
-st_autorefresh(interval=300000, key="refresh")  # 5 minutes = 300,000 ms
-st.session_state.refresh_count += 1
-
-# App UI
-st.title("🌐 Website Change Tracker")
-now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-heartbeat = random.choice(["🟢", "🟡", "🟣", "🔵", "🟠"])
-st.markdown(f"### {heartbeat} Monitoring every 5 minutes")
-st.markdown(f"🕒 **Last checked:** `{now}`")
-st.markdown(f"🔁 **Refresh count:** `{st.session_state.refresh_count}`")
-
-# Check for changes with loading spinner
-with st.spinner("🔍 Checking website for changes..."):
     try:
-        content = get_website_content(URL)
-        current_hash = hash_content(content)
-
-        if st.session_state.prev_hash is None:
-            st.session_state.prev_hash = current_hash
-            st.success("✅ First load done. Hash saved.")
-        elif current_hash != st.session_state.prev_hash:
-            st.warning("⚠️ Change Detected!")
-            st.session_state.prev_hash = current_hash
-            send_telegram_message("⚠️ Change detected on the website!")
-            send_email("Website Change Detected", f"A change was detected at {now}.\n\nURL: {URL}")
-        else:
-            st.info("✅ No change detected.")
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        st.success("📧 Email notification sent!")
     except Exception as e:
-        st.error(f"❌ Error occurred: {e}")
+        st.error(f"❌ Email failed: {e}")
 
-# Final status
-st.markdown("💓 *This app is running and will check the website every 5 minutes automatically.*")
+def send_telegram_notification(url):
+    message = f"🔔 Change detected at {url}"
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": message}
+        )
+        if response.status_code == 200:
+            st.success("📩 Telegram notification sent!")
+        else:
+            st.warning("⚠️ Telegram message failed to send.")
+    except Exception as e:
+        st.error(f"❌ Telegram error: {e}")
+
+if url.strip() != "":
+    placeholder = st.empty()
+    prev_hash = None
+    refresh_count = 0
+
+    while True:
+        try:
+            response = requests.get(url, timeout=10)
+            content = response.text
+            current_hash = hashlib.md5(content.encode()).hexdigest()
+
+            if prev_hash is None:
+                prev_hash = current_hash
+                placeholder.success("✅ Monitoring started. Waiting for changes...")
+
+            elif current_hash != prev_hash:
+                st.error("🚨 Change Detected!")
+                send_email_notification(url)
+                send_telegram_notification(url)
+                prev_hash = current_hash
+            else:
+                placeholder.info(f"🔁 Refresh count: {refresh_count + 1}")
+
+            refresh_count += 1
+            time.sleep(refresh_interval)
+
+        except Exception as e:
+            st.error(f"❌ Error while checking the website: {e}")
+            break
+else:
+    st.info("ℹ️ Please enter a URL above to begin monitoring.")
