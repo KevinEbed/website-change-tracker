@@ -34,21 +34,53 @@ with app.app_context():
 monitoring_threads = {}
 
 HTML_TEMPLATE = '''
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-    <title>URL Monitor</title>
+    <meta charset="UTF-8">
+    <title>URL Monitoring</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(to right, #e0f7fa, #e8eaf6);
+            font-family: 'Inter', sans-serif;
+        }
+        .container {
+            margin-top: 60px;
+            max-width: 800px;
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+        }
+        h2 {
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .btn {
+            border-radius: 10px;
+            font-weight: 500;
+        }
+        .list-group-item {
+            border: none;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        input.form-control {
+            border-radius: 10px;
+        }
+    </style>
 </head>
-<body class="bg-light">
-<div class="container py-5">
-    <h2 class="mb-4 text-center">🌐 Website Change Monitor</h2>
+<body>
+<div class="container">
+    <h2>🔍 Website Change Monitor</h2>
     <form method="post" class="row g-3 mb-4">
         <div class="col-md-6">
             <input type="text" name="link" class="form-control" placeholder="Enter URL" required>
         </div>
         <div class="col-md-3">
-            <input type="number" name="interval" class="form-control" placeholder="Check every (sec)" required min="10">
+            <input type="number" name="interval" class="form-control" placeholder="Check every (sec)" min="10" required>
         </div>
         <div class="col-md-3">
             <button type="submit" class="btn btn-primary w-100">➕ Add URL</button>
@@ -58,7 +90,7 @@ HTML_TEMPLATE = '''
         {% for url in urls %}
         <li class="list-group-item d-flex justify-content-between align-items-center">
             <div>
-                <strong>{{ url.link }}</strong> — every {{ url.interval }}s
+                <strong>{{ url.link }}</strong> <small class="text-muted">({{ url.interval }}s)</small>
                 {% if url.monitoring %}
                     <span class="badge bg-success ms-2">Monitoring</span>
                 {% else %}
