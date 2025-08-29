@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, render_template_string
+import streamlit as st
 from flask_sqlalchemy import SQLAlchemy
 import requests
 import hashlib
@@ -9,6 +9,8 @@ import time
 from datetime import datetime
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, Column, Integer, String, Boolean
+from sqlalchemy.orm import sessionmaker, declarative_base
 
 # Load environment variables
 load_dotenv()
@@ -18,100 +20,23 @@ EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///urls.db'
-db = SQLAlchemy(app)
+# Database setup
+Base = declarative_base()
+engine = create_engine("sqlite:///urls.db")
+Session = sessionmaker(bind=engine)
+db_session = Session()
 
-class URL(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    link = db.Column(db.String(500), nullable=False)
-    monitoring = db.Column(db.Boolean, default=False)
-    interval = db.Column(db.Integer, default=60)
+class URL(Base):
+    __tablename__ = "urls"
+    id = Column(Integer, primary_key=True)
+    link = Column(String(500), nullable=False)
+    monitoring = Column(Boolean, default=False)
+    interval = Column(Integer, default=60)
 
-with app.app_context():
-    db.create_all()
+Base.metadata.create_all(engine)
 
+# Store monitoring threads
 monitoring_threads = {}
-
-HTML_TEMPLATE = '''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>URL Monitoring</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body {
-            background: linear-gradient(to right, #e0f7fa, #e8eaf6);
-            font-family: 'Inter', sans-serif;
-        }
-        .container {
-            margin-top: 60px;
-            max-width: 800px;
-            background: #ffffff;
-            padding: 30px;
-            border-radius: 16px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
-        }
-        h2 {
-            font-weight: 600;
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .btn {
-            border-radius: 10px;
-            font-weight: 500;
-        }
-        .list-group-item {
-            border: none;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        input.form-control {
-            border-radius: 10px;
-        }
-    </style>
-</head>
-<body>
-<div class="container">
-    <h2>🔍 Website Change Monitor</h2>
-    <form method="post" class="row g-3 mb-4">
-        <div class="col-md-6">
-            <input type="text" name="link" class="form-control" placeholder="Enter URL" required>
-        </div>
-        <div class="col-md-3">
-            <input type="number" name="interval" class="form-control" placeholder="Check every (sec)" min="10" required>
-        </div>
-        <div class="col-md-3">
-            <button type="submit" class="btn btn-primary w-100">➕ Add URL</button>
-        </div>
-    </form>
-    <ul class="list-group">
-        {% for url in urls %}
-        <li class="list-group-item d-flex justify-content-between align-items-center">
-            <div>
-                <strong>{{ url.link }}</strong> <small class="text-muted">({{ url.interval }}s)</small>
-                {% if url.monitoring %}
-                    <span class="badge bg-success ms-2">Monitoring</span>
-                {% else %}
-                    <span class="badge bg-secondary ms-2">Idle</span>
-                {% endif %}
-            </div>
-            <div>
-                {% if url.monitoring %}
-                    <a href="/stop/{{ url.id }}" class="btn btn-warning btn-sm">⛔ Stop</a>
-                {% else %}
-                    <a href="/start/{{ url.id }}" class="btn btn-success btn-sm">▶️ Start</a>
-                {% endif %}
-                <a href="/delete/{{ url.id }}" class="btn btn-danger btn-sm">🗑 Delete</a>
-            </div>
-        </li>
-        {% endfor %}
-    </ul>
-</div>
-</body>
-</html>
-'''
 
 def send_email(subject, body):
     msg = MIMEText(body)
@@ -148,11 +73,12 @@ def monitor_website(url, url_id, interval):
         return
 
     while True:
-        with app.app_context():
-            url_obj = URL.query.get(url_id)
-            if not url_obj or not url_obj.monitoring:
-                print(f"[INFO] Monitoring stopped for {url}")
-                break
+        session = Session()
+        url_obj = session.query(URL).get(url_id)
+        if not url_obj or not url_obj.monitoring:
+            print(f"[INFO] Monitoring stopped for {url}")
+            session.close()
+            break
 
         try:
             time.sleep(interval)
@@ -169,44 +95,51 @@ def monitor_website(url, url_id, interval):
         except Exception as e:
             print(f"[ERROR] Error during monitoring: {e}")
 
-@app.route('/', methods=['GET', 'POST'])
-def home():
-    if request.method == 'POST':
-        link = request.form['link']
-        interval = int(request.form['interval'])
-        if link and interval:
-            new_url = URL(link=link, interval=interval)
-            db.session.add(new_url)
-            db.session.commit()
-    urls = URL.query.all()
-    return render_template_string(HTML_TEMPLATE, urls=urls)
+# ---------------- Streamlit UI ----------------
 
-@app.route('/start/<int:url_id>')
-def start_monitoring(url_id):
-    url_entry = URL.query.get_or_404(url_id)
-    if not url_entry.monitoring:
-        url_entry.monitoring = True
-        db.session.commit()
-        thread = threading.Thread(target=monitor_website, args=(url_entry.link, url_id, url_entry.interval), daemon=True)
-        monitoring_threads[url_id] = thread
-        thread.start()
-    return redirect('/')
+st.set_page_config(page_title="Website Change Monitor", layout="centered")
 
-@app.route('/stop/<int:url_id>')
-def stop_monitoring(url_id):
-    url_entry = URL.query.get_or_404(url_id)
-    url_entry.monitoring = False
-    db.session.commit()
-    return redirect('/')
+st.title("🔍 Website Change Monitor")
 
-@app.route('/delete/<int:url_id>')
-def delete_url(url_id):
-    url_entry = URL.query.get_or_404(url_id)
-    if url_entry.monitoring:
-        url_entry.monitoring = False
-    db.session.delete(url_entry)
-    db.session.commit()
-    return redirect('/')
+# Form to add new URL
+with st.form("add_url_form"):
+    link = st.text_input("Enter URL")
+    interval = st.number_input("Check every (seconds)", min_value=10, value=60)
+    submitted = st.form_submit_button("➕ Add URL")
+    if submitted and link:
+        new_url = URL(link=link, interval=interval)
+        db_session.add(new_url)
+        db_session.commit()
+        st.success(f"Added {link} with interval {interval}s")
 
-#if __name__ == '__main__':
-#    app.run(host='0.0.0.0', port=8080, debug=True)
+# Show all URLs
+urls = db_session.query(URL).all()
+st.subheader("Tracked URLs")
+
+for url in urls:
+    cols = st.columns([4, 1, 1, 1])
+    cols[0].write(f"**{url.link}** ({url.interval}s)")
+    if url.monitoring:
+        cols[0].markdown('<span style="color:green;">Monitoring</span>', unsafe_allow_html=True)
+    else:
+        cols[0].markdown('<span style="color:gray;">Idle</span>', unsafe_allow_html=True)
+
+    if cols[1].button("▶️ Start", key=f"start_{url.id}"):
+        if not url.monitoring:
+            url.monitoring = True
+            db_session.commit()
+            thread = threading.Thread(target=monitor_website, args=(url.link, url.id, url.interval), daemon=True)
+            monitoring_threads[url.id] = thread
+            thread.start()
+            st.experimental_rerun()
+
+    if cols[2].button("⛔ Stop", key=f"stop_{url.id}"):
+        url.monitoring = False
+        db_session.commit()
+        st.experimental_rerun()
+
+    if cols[3].button("🗑 Delete", key=f"delete_{url.id}"):
+        url.monitoring = False
+        db_session.delete(url)
+        db_session.commit()
+        st.experimental_rerun()
