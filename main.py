@@ -131,15 +131,15 @@ for url in urls:
             thread = threading.Thread(target=monitor_website, args=(url.link, url.id, url.interval), daemon=True)
             monitoring_threads[url.id] = thread
             thread.start()
-            st.experimental_rerun()
+            st.rerun()
 
     if cols[2].button("⛔ Stop", key=f"stop_{url.id}"):
         url.monitoring = False
         db_session.commit()
-        st.experimental_rerun()
+        st.rerun()
 
     if cols[3].button("🗑 Delete", key=f"delete_{url.id}"):
         url.monitoring = False
         db_session.delete(url)
         db_session.commit()
-        st.experimental_rerun()
+        st.rerun()
