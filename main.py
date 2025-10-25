@@ -101,26 +101,20 @@ def monitor_website(url, url_id, interval):
             session.close()
 
 
-# Keep Streamlit awake (ping itself)
-def keep_alive():
-    while True:
-        try:
-            requests.get("https://website-change-tracker.streamlit.app", timeout=10)
-            print("[PING] App kept alive.")
-        except Exception as e:
-            print(f"[WARN] Keep-alive ping failed: {e}")
-        time.sleep(300)  # every 5 minutes
+# ---------------- Ping Endpoint ----------------
+def serve_ping():
+    """Simple endpoint to confirm app is alive."""
+    st.set_page_config(page_title="Ping")
+    st.write("✅ Pong! The app is alive.")
+    st.stop()
 
 
 # ---------------- Streamlit UI ----------------
+if st.query_params.get("ping") == "1":
+    serve_ping()
+
 st.set_page_config(page_title="Website Change Monitor", layout="centered")
 st.title("🔍 Website Change Monitor")
-
-# Start keep-alive thread once
-if "keep_alive_thread" not in st.session_state:
-    t = threading.Thread(target=keep_alive, daemon=True)
-    t.start()
-    st.session_state["keep_alive_thread"] = t
 
 # DB session
 session = Session()
