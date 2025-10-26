@@ -7,16 +7,24 @@ import smtplib
 import threading
 import time
 import certifi
+import ssl
 from datetime import datetime
 from email.mime.text import MIMEText
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 
-# ---------------- Ping Handler ----------------
-if st.query_params.get("ping") == ["1"]:
+# 🔹 Handle ping check (MUST be first)
+params = st.query_params  # Access the new query params API
+if "ping" in params and params["ping"] == ["1"]:
     st.write("✅ Pong! The app is alive.")
-    st.stop()
+    st.stop()  # Stop execution so the main UI doesn’t render
+
+# ------------------- Rest of your imports and logic below -------------------
+st.set_page_config(page_title="Website Change Tracker", page_icon="🔍")
+
+st.title("🔍 Website Change Tracker")
+st.write("Monitor a webpage for changes and get notified automatically!")
 
 # ---------------- Setup ----------------
 st.set_page_config(page_title="Website Change Tracker", layout="centered")
