@@ -21,9 +21,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # ---------------- Database setup ----------------
 Base = declarative_base()
-engine = create_engine("sqlite:///urls.db")
+engine = create_engine("sqlite:///urls.db", connect_args={"check_same_thread": False})
 Session = sessionmaker(bind=engine)
-db_session = Session()
 
 class URL(Base):
     __tablename__ = "urls"
@@ -32,7 +31,6 @@ class URL(Base):
     monitoring = Column(Boolean, default=False)
     interval = Column(Integer, default=60)
     last_checked = Column(DateTime, nullable=True)
-    last_change = Column(DateTime, nullable=True)
 
 Base.metadata.create_all(engine)
 
@@ -56,7 +54,10 @@ def send_email(subject, body):
 def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message
+        }
         requests.post(url, data=payload)
         print("[INFO] Telegram message sent.")
     except Exception as e:
@@ -85,19 +86,17 @@ def monitor_website(url, url_id, interval):
             response = requests.get(url)
             current_hash = hashlib.md5(response.content).hexdigest()
             url_obj.last_checked = datetime.now()
+            session.commit()
 
             if current_hash != old_hash:
-                url_obj.last_change = datetime.now()
-                session.commit()
-
                 print(f"[INFO] Change detected on {url} at {datetime.now()}")
-                message = f"🔔 Change detected on: {url}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                message = f"🔔 Change detected on: {url} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 send_email("Website Content Changed", message)
                 send_telegram(message)
                 old_hash = current_hash
             else:
-                session.commit()
                 print(f"[DEBUG] No change at {datetime.now()}")
+
         except Exception as e:
             print(f"[ERROR] Error during monitoring: {e}")
         finally:
@@ -110,62 +109,55 @@ st.set_page_config(page_title="Website Change Monitor", layout="centered")
 query_params = st.query_params
 if "ping" in query_params:
     st.write("pong")
-    st.stop()  # Respond to ?ping=1
+    st.stop()
 
 st.title("🔍 Website Change Monitor")
 
-# --- Auto resume monitoring ---
-for url in db_session.query(URL).filter_by(monitoring=True).all():
+# ---------------- Auto-resume monitoring ----------------
+db_session = Session()
+active_urls = db_session.query(URL).filter_by(monitoring=True).all()
+for url in active_urls:
     if url.id not in monitoring_threads:
         thread = threading.Thread(target=monitor_website, args=(url.link, url.id, url.interval), daemon=True)
         monitoring_threads[url.id] = thread
         thread.start()
         print(f"[AUTO] Resumed monitoring for {url.link}")
+db_session.close()
 
-# --- Add URL Form ---
+# ---------------- Add URL Form ----------------
 with st.form("add_url_form"):
-    link = st.text_input("🌐 Enter URL")
-    interval = st.number_input("⏱️ Check every (seconds)", min_value=10, value=60)
+    link = st.text_input("Enter URL")
+    interval = st.number_input("Check every (seconds)", min_value=10, value=60)
     submitted = st.form_submit_button("➕ Add URL")
     if submitted and link:
+        session = Session()
         new_url = URL(link=link, interval=interval)
-        db_session.add(new_url)
-        db_session.commit()
-        st.success(f"✅ Added {link} (interval {interval}s)")
+        session.add(new_url)
+        session.commit()
+        session.close()
+        st.success(f"Added {link} with interval {interval}s")
+        st.rerun()
 
-# --- Auto refresh timestamps every 10 seconds ---
-st_autorefresh = getattr(st, "autorefresh", None)
-if st_autorefresh:
-    st_autorefresh(interval=10 * 1000, key="refresh_data")
-
-# --- Display URLs ---
-urls = db_session.query(URL).all()
-st.subheader("📋 Tracked Websites")
-
-if not urls:
-    st.info("No URLs added yet. Add one above to start monitoring.")
+# ---------------- Display URLs ----------------
+session = Session()
+urls = session.query(URL).all()
+st.subheader("Tracked URLs")
 
 for url in urls:
     cols = st.columns([4, 1, 1, 1])
-    cols[0].markdown(f"**{url.link}** ({url.interval}s)")
+    last_checked_str = url.last_checked.strftime("%Y-%m-%d %H:%M:%S") if url.last_checked else "Never"
+    cols[0].write(f"**{url.link}** ({url.interval}s)")
+    cols[0].markdown(f"<small>🕒 Last checked: {last_checked_str}</small>", unsafe_allow_html=True)
 
-    # Status indicator
     if url.monitoring:
-        cols[0].markdown('<span style="color:green;">🟢 Monitoring</span>', unsafe_allow_html=True)
+        cols[0].markdown('<span style="color:green;">Monitoring</span>', unsafe_allow_html=True)
     else:
-        cols[0].markdown('<span style="color:gray;">🔴 Idle</span>', unsafe_allow_html=True)
+        cols[0].markdown('<span style="color:gray;">Idle</span>', unsafe_allow_html=True)
 
-    # Timestamps
-    last_checked = url.last_checked.strftime('%Y-%m-%d %H:%M:%S') if url.last_checked else "—"
-    last_change = url.last_change.strftime('%Y-%m-%d %H:%M:%S') if url.last_change else "—"
-    st.caption(f"⏰ Last Checked: {last_checked}")
-    st.caption(f"🔁 Last Change: {last_change}")
-
-    # Buttons
     if cols[1].button("▶️ Start", key=f"start_{url.id}"):
         if not url.monitoring:
             url.monitoring = True
-            db_session.commit()
+            session.commit()
             thread = threading.Thread(target=monitor_website, args=(url.link, url.id, url.interval), daemon=True)
             monitoring_threads[url.id] = thread
             thread.start()
@@ -173,11 +165,13 @@ for url in urls:
 
     if cols[2].button("⛔ Stop", key=f"stop_{url.id}"):
         url.monitoring = False
-        db_session.commit()
+        session.commit()
         st.rerun()
 
     if cols[3].button("🗑 Delete", key=f"delete_{url.id}"):
         url.monitoring = False
-        db_session.delete(url)
-        db_session.commit()
+        session.delete(url)
+        session.commit()
         st.rerun()
+
+session.close()
