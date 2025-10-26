@@ -1,5 +1,4 @@
 import streamlit as st
-from flask_sqlalchemy import SQLAlchemy
 import requests
 import hashlib
 import os
@@ -111,7 +110,7 @@ st.set_page_config(page_title="Website Change Monitor", layout="centered")
 query_params = st.query_params
 if "ping" in query_params:
     st.write("pong")
-    st.stop()
+    st.stop()  # Respond to ?ping=1
 
 st.title("🔍 Website Change Monitor")
 
@@ -134,9 +133,10 @@ with st.form("add_url_form"):
         db_session.commit()
         st.success(f"✅ Added {link} (interval {interval}s)")
 
-# --- Auto refresh every 10s to update timestamps ---
-st_autorefresh = st.experimental_data_editor if not hasattr(st, "autorefresh") else st.autorefresh
-st_autorefresh(interval=10 * 1000, key="refresh_timestamps")
+# --- Auto refresh timestamps every 10 seconds ---
+st_autorefresh = getattr(st, "autorefresh", None)
+if st_autorefresh:
+    st_autorefresh(interval=10 * 1000, key="refresh_data")
 
 # --- Display URLs ---
 urls = db_session.query(URL).all()
@@ -146,34 +146,38 @@ if not urls:
     st.info("No URLs added yet. Add one above to start monitoring.")
 
 for url in urls:
-    with st.expander(f"{url.link}", expanded=True):
-        status = "🟢 Monitoring" if url.monitoring else "🔴 Idle"
-        st.markdown(f"**Status:** {status}")
-        st.markdown(f"**Check Interval:** {url.interval}s")
+    cols = st.columns([4, 1, 1, 1])
+    cols[0].markdown(f"**{url.link}** ({url.interval}s)")
 
-        last_checked = url.last_checked.strftime('%Y-%m-%d %H:%M:%S') if url.last_checked else "—"
-        last_change = url.last_change.strftime('%Y-%m-%d %H:%M:%S') if url.last_change else "—"
+    # Status indicator
+    if url.monitoring:
+        cols[0].markdown('<span style="color:green;">🟢 Monitoring</span>', unsafe_allow_html=True)
+    else:
+        cols[0].markdown('<span style="color:gray;">🔴 Idle</span>', unsafe_allow_html=True)
 
-        st.markdown(f"**Last Checked:** {last_checked}")
-        st.markdown(f"**Last Change Detected:** {last_change}")
+    # Timestamps
+    last_checked = url.last_checked.strftime('%Y-%m-%d %H:%M:%S') if url.last_checked else "—"
+    last_change = url.last_change.strftime('%Y-%m-%d %H:%M:%S') if url.last_change else "—"
+    st.caption(f"⏰ Last Checked: {last_checked}")
+    st.caption(f"🔁 Last Change: {last_change}")
 
-        cols = st.columns(3)
-        if cols[0].button("▶️ Start", key=f"start_{url.id}"):
-            if not url.monitoring:
-                url.monitoring = True
-                db_session.commit()
-                thread = threading.Thread(target=monitor_website, args=(url.link, url.id, url.interval), daemon=True)
-                monitoring_threads[url.id] = thread
-                thread.start()
-                st.rerun()
-
-        if cols[1].button("⛔ Stop", key=f"stop_{url.id}"):
-            url.monitoring = False
+    # Buttons
+    if cols[1].button("▶️ Start", key=f"start_{url.id}"):
+        if not url.monitoring:
+            url.monitoring = True
             db_session.commit()
+            thread = threading.Thread(target=monitor_website, args=(url.link, url.id, url.interval), daemon=True)
+            monitoring_threads[url.id] = thread
+            thread.start()
             st.rerun()
 
-        if cols[2].button("🗑 Delete", key=f"delete_{url.id}"):
-            url.monitoring = False
-            db_session.delete(url)
-            db_session.commit()
-            st.rerun()
+    if cols[2].button("⛔ Stop", key=f"stop_{url.id}"):
+        url.monitoring = False
+        db_session.commit()
+        st.rerun()
+
+    if cols[3].button("🗑 Delete", key=f"delete_{url.id}"):
+        url.monitoring = False
+        db_session.delete(url)
+        db_session.commit()
+        st.rerun()
