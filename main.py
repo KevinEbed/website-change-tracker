@@ -14,10 +14,10 @@ from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 
 # ---------------- Ping Handler ----------------
-query_params = st.experimental_get_query_params()
-if "ping" in query_params and query_params["ping"][0] == "1":
+if st.query_params.get("ping") == ["1"]:
     st.write("✅ Pong! The app is alive.")
     st.stop()  # Stop the rest of the app from running
+
 
 # ---------------- Setup ----------------
 st.set_page_config(page_title="Website Change Tracker", layout="centered")
