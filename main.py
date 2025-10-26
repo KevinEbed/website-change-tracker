@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, Boolean
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# Load environment variables
+# ---------------- Load environment variables ----------------
 load_dotenv()
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
@@ -20,7 +20,7 @@ EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Database setup
+# ---------------- Database setup ----------------
 Base = declarative_base()
 engine = create_engine("sqlite:///urls.db")
 Session = sessionmaker(bind=engine)
@@ -35,9 +35,10 @@ class URL(Base):
 
 Base.metadata.create_all(engine)
 
-# Store monitoring threads
+# ---------------- Global data ----------------
 monitoring_threads = {}
 
+# ---------------- Notification functions ----------------
 def send_email(subject, body):
     msg = MIMEText(body)
     msg['From'] = EMAIL_SENDER
@@ -63,6 +64,7 @@ def send_telegram(message):
     except Exception as e:
         print(f"[ERROR] Failed to send Telegram message: {e}")
 
+# ---------------- Monitoring function ----------------
 def monitor_website(url, url_id, interval):
     print(f"👀 Monitoring {url}")
     try:
@@ -95,13 +97,26 @@ def monitor_website(url, url_id, interval):
         except Exception as e:
             print(f"[ERROR] Error during monitoring: {e}")
 
-# ---------------- Streamlit UI ----------------
-
+# ---------------- Streamlit App ----------------
 st.set_page_config(page_title="Website Change Monitor", layout="centered")
+
+# --- PING/PONG handler ---
+query_params = st.query_params
+if "ping" in query_params:
+    st.write("pong")
+    st.stop()  # Stop execution after responding
 
 st.title("🔍 Website Change Monitor")
 
-# Form to add new URL
+# Auto-resume monitoring on app restart
+for url in db_session.query(URL).filter_by(monitoring=True).all():
+    if url.id not in monitoring_threads:
+        thread = threading.Thread(target=monitor_website, args=(url.link, url.id, url.interval), daemon=True)
+        monitoring_threads[url.id] = thread
+        thread.start()
+        print(f"[AUTO] Resumed monitoring for {url.link}")
+
+# ---------------- Add URL Form ----------------
 with st.form("add_url_form"):
     link = st.text_input("Enter URL")
     interval = st.number_input("Check every (seconds)", min_value=10, value=60)
@@ -112,7 +127,7 @@ with st.form("add_url_form"):
         db_session.commit()
         st.success(f"Added {link} with interval {interval}s")
 
-# Show all URLs
+# ---------------- Display URLs ----------------
 urls = db_session.query(URL).all()
 st.subheader("Tracked URLs")
 
