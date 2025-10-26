@@ -5,6 +5,7 @@ import os
 import smtplib
 import threading
 import time
+import tempfile
 from datetime import datetime
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
@@ -22,8 +23,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 Base = declarative_base()
 
-# ✅ Thread-safe SQLite connection
-engine = create_engine("sqlite:///urls.db", connect_args={"check_same_thread": False})
+# ✅ Use temp directory for Streamlit Cloud (read-only root fix)
+db_path = os.path.join(tempfile.gettempdir(), "urls.db")
+engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
 Session = sessionmaker(bind=engine)
 
 
