@@ -16,8 +16,7 @@ from dotenv import load_dotenv
 # ---------------- Ping Handler ----------------
 if st.query_params.get("ping") == ["1"]:
     st.write("✅ Pong! The app is alive.")
-    st.stop()  # Stop the rest of the app from running
-
+    st.stop()
 
 # ---------------- Setup ----------------
 st.set_page_config(page_title="Website Change Tracker", layout="centered")
@@ -35,11 +34,10 @@ if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump([], f)
 
-
 # ---------------- Helpers ----------------
 def send_email(subject, body):
     """Send an email notification."""
-    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
         print("[WARN] Missing email credentials.")
         return
     try:
@@ -51,10 +49,9 @@ def send_email(subject, body):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
             server.send_message(msg)
-        print("[INFO] Email sent.")
+        print("[INFO] Email sent successfully.")
     except Exception as e:
         print(f"[ERROR] Failed to send email: {e}")
-
 
 def send_telegram(message):
     """Send a Telegram message."""
@@ -64,22 +61,19 @@ def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
-        print("[INFO] Telegram message sent.")
+        print("[INFO] Telegram message sent successfully.")
     except Exception as e:
         print(f"[ERROR] Telegram failed: {e}")
-
 
 def load_urls():
     """Load URLs from the JSON file."""
     with open(DATA_FILE, "r") as f:
         return json.load(f)
 
-
 def save_urls(data):
     """Save URLs to the JSON file."""
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
-
 
 def get_page_hash(url):
     """Fetch a URL and return its content hash using safe SSL and retries."""
@@ -97,7 +91,6 @@ def get_page_hash(url):
         st.error(f"❌ Error fetching {url}: {e}")
         print(f"[ERROR] {url} fetch failed: {e}")
         return None
-
 
 def monitor_website(url_entry):
     """Background thread to monitor a single URL."""
@@ -133,7 +126,6 @@ def monitor_website(url_entry):
             print(f"[INFO] Stopped monitoring {url}")
             break
 
-
 # ---------------- Streamlit UI ----------------
 st.title("🔍 Website Change Tracker")
 
@@ -150,7 +142,7 @@ with st.form("add_url_form"):
         urls.append(new_entry)
         save_urls(urls)
         st.success(f"✅ Added {link} with interval {interval}s")
-        st.rerun()
+        st.experimental_rerun()
 
 # Display tracked URLs
 st.subheader("Tracked URLs")
@@ -169,20 +161,20 @@ else:
                 save_urls(urls)
                 threading.Thread(target=monitor_website, args=(entry,), daemon=True).start()
                 st.success(f"Started monitoring {entry['link']}")
-                st.rerun()
+                st.experimental_rerun()
 
         if cols[2].button("⛔ Stop", key=f"stop_{i}"):
             entry["monitoring"] = False
             save_urls(urls)
             st.info(f"Stopped monitoring {entry['link']}")
-            st.rerun()
+            st.experimental_rerun()
 
         if cols[3].button("🗑 Delete", key=f"delete_{i}"):
             entry["monitoring"] = False
             del urls[i]
             save_urls(urls)
             st.warning(f"Deleted {entry['link']}")
-            st.rerun()
+            st.experimental_rerun()
 
 # Footer
 st.markdown("---")
