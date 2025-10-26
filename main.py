@@ -1,191 +1,130 @@
 import streamlit as st
 import requests
+import sqlite3
 import hashlib
-import json
-import os
-import smtplib
-import threading
+import difflib
 import time
-import certifi
-import ssl
+import os
 from datetime import datetime
-from email.mime.text import MIMEText
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from dotenv import load_dotenv
 
-# ---------------- Ping Handler (must come first) ----------------
-params = st.query_params  # New API replacing experimental_get_query_params
-if "ping" in params and params["ping"] == ["1"]:
-    st.write("✅ Pong! The app is alive.")
-    st.stop()  # Prevent main app from rendering
+# ---------------------------
+# CONFIG
+# ---------------------------
+st.set_page_config(page_title="Website Change Tracker", layout="wide")
 
-# ---------------- Setup ----------------
-st.set_page_config(page_title="Website Change Tracker", page_icon="🔍", layout="centered")
-st.title("🔍 Website Change Tracker")
-st.write("Monitor webpages for changes and get notified automatically via Email or Telegram!")
+DB_FILE = "tracker.db"
 
-# Load environment variables
-load_dotenv()
+# ---------------------------
+# DATABASE SETUP
+# ---------------------------
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS websites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT UNIQUE,
+            last_hash TEXT,
+            last_checked TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+def get_websites():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM websites")
+    data = c.fetchall()
+    conn.close()
+    return data
 
-DATA_FILE = "urls.json"
-if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "w") as f:
-        json.dump([], f)
+def add_website(url):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO websites (url, last_hash, last_checked) VALUES (?, ?, ?)",
+              (url, "", "Never"))
+    conn.commit()
+    conn.close()
 
+def update_website(url, new_hash):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE websites SET last_hash=?, last_checked=? WHERE url=?",
+              (new_hash, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), url))
+    conn.commit()
+    conn.close()
 
-# ---------------- Helper Functions ----------------
-def send_email(subject, body):
-    """Send an email notification."""
-    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
-        print("[WARN] Missing email credentials.")
-        return
+# ---------------------------
+# WEBSITE MONITORING
+# ---------------------------
+def get_website_hash(url):
     try:
-        msg = MIMEText(body)
-        msg["From"] = EMAIL_SENDER
-        msg["To"] = EMAIL_RECEIVER
-        msg["Subject"] = subject
-
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
-        print("[INFO] Email sent successfully.")
-    except Exception as e:
-        print(f"[ERROR] Failed to send email: {e}")
-
-
-def send_telegram(message):
-    """Send a Telegram message."""
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("[WARN] Missing Telegram credentials.")
-        return
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
-        print("[INFO] Telegram message sent successfully.")
-    except Exception as e:
-        print(f"[ERROR] Telegram failed: {e}")
-
-
-def load_urls():
-    """Load URLs from the JSON file."""
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
-
-
-def save_urls(data):
-    """Save URLs to the JSON file."""
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-
-def get_page_hash(url):
-    """Fetch a URL and return its content hash using safe SSL and retries."""
-    session = requests.Session()
-    retry = Retry(connect=3, backoff_factor=2)
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-
-    try:
-        response = session.get(url, timeout=15, verify=certifi.where())
+        response = requests.get(url, timeout=10, verify=False)  # Ignore SSL issues
         response.raise_for_status()
-        return hashlib.sha256(response.text.encode("utf-8")).hexdigest()
+        return hashlib.md5(response.text.encode('utf-8')).hexdigest()
     except Exception as e:
         st.error(f"❌ Error fetching {url}: {e}")
-        print(f"[ERROR] {url} fetch failed: {e}")
         return None
 
+def check_for_changes():
+    websites = get_websites()
+    changed_sites = []
+    for _, url, last_hash, _ in websites:
+        current_hash = get_website_hash(url)
+        if current_hash and current_hash != last_hash:
+            changed_sites.append(url)
+            update_website(url, current_hash)
+    return changed_sites
 
-def monitor_website(url_entry):
-    """Background thread to monitor a single URL."""
-    url = url_entry["link"]
-    interval = url_entry["interval"]
-    print(f"👀 Monitoring {url}")
+# ---------------------------
+# PING ENDPOINT
+# ---------------------------
+query_params = st.query_params
 
-    old_hash = get_page_hash(url)
-    if not old_hash:
-        print(f"[ERROR] Could not fetch initial content for {url}.")
-        return
+if "ping" in query_params:
+    st.write("pong ✅")
+    st.stop()  # Stops Streamlit from rendering the rest of the app
 
-    while url_entry["monitoring"]:
-        time.sleep(interval)
-        current_hash = get_page_hash(url)
-        if not current_hash:
-            continue
+# ---------------------------
+# MAIN APP
+# ---------------------------
+st.title("🌐 Website Change Tracker")
+st.write("Monitor web pages for content updates automatically.")
 
-        if current_hash != old_hash:
-            print(f"[CHANGE] {url} changed at {datetime.now()}")
-            message = f"🔔 Change detected on:\n{url}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            send_email("Website Content Changed", message)
-            send_telegram(message)
-            old_hash = current_hash
+# Sidebar
+with st.sidebar:
+    st.header("Add Website to Track")
+    url = st.text_input("Enter website URL")
+    if st.button("Add Website"):
+        if url.strip():
+            add_website(url.strip())
+            st.success(f"✅ Added {url}")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.warning("Please enter a valid URL.")
 
-        urls = load_urls()
-        for entry in urls:
-            if entry["link"] == url:
-                url_entry["monitoring"] = entry["monitoring"]
-        save_urls(urls)
-
-        if not url_entry["monitoring"]:
-            print(f"[INFO] Stopped monitoring {url}")
-            break
-
-
-# ---------------- Streamlit UI ----------------
-urls = load_urls()
-
-# Add new URL form
-with st.form("add_url_form"):
-    link = st.text_input("Enter URL")
-    interval = st.number_input("Check every (seconds)", min_value=10, value=60)
-    submitted = st.form_submit_button("➕ Add URL")
-
-    if submitted and link:
-        new_entry = {"link": link, "interval": interval, "monitoring": False}
-        urls.append(new_entry)
-        save_urls(urls)
-        st.success(f"✅ Added {link} with interval {interval}s")
+    if st.button("Check Now"):
+        changed = check_for_changes()
+        if changed:
+            st.success(f"🔔 Changes detected on: {', '.join(changed)}")
+        else:
+            st.info("No changes detected.")
         st.rerun()
 
-# Display tracked URLs
-st.subheader("Tracked URLs")
-
-if not urls:
-    st.info("No URLs are being tracked yet. Add one above.")
+# Display tracked websites
+st.subheader("Tracked Websites")
+data = get_websites()
+if not data:
+    st.info("No websites being tracked yet.")
 else:
-    for i, entry in enumerate(urls):
-        cols = st.columns([4, 1, 1, 1])
-        status = "🟢 Monitoring" if entry["monitoring"] else "⚪ Idle"
-        cols[0].markdown(f"**{entry['link']}** ({entry['interval']}s) — {status}")
+    for _, url, last_hash, last_checked in data:
+        st.markdown(f"**🔗 {url}**")
+        st.caption(f"Last checked: {last_checked}")
 
-        if cols[1].button("▶️ Start", key=f"start_{i}"):
-            if not entry["monitoring"]:
-                entry["monitoring"] = True
-                save_urls(urls)
-                threading.Thread(target=monitor_website, args=(entry,), daemon=True).start()
-                st.success(f"Started monitoring {entry['link']}")
-                st.rerun()
-
-        if cols[2].button("⛔ Stop", key=f"stop_{i}"):
-            entry["monitoring"] = False
-            save_urls(urls)
-            st.info(f"Stopped monitoring {entry['link']}")
-            st.rerun()
-
-        if cols[3].button("🗑 Delete", key=f"delete_{i}"):
-            entry["monitoring"] = False
-            del urls[i]
-            save_urls(urls)
-            st.warning(f"Deleted {entry['link']}")
-            st.rerun()
-
-# ---------------- Footer ----------------
-st.markdown("---")
-st.caption("🧠 Built with ❤️ using Streamlit, Python, and Certifi for safe HTTPS handling.")
+# ---------------------------
+# INIT
+# ---------------------------
+if not os.path.exists(DB_FILE):
+    init_db()
