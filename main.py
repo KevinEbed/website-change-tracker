@@ -1,5 +1,4 @@
 import streamlit as st
-from flask_sqlalchemy import SQLAlchemy
 import requests
 import hashlib
 import os
@@ -9,7 +8,7 @@ import time
 from datetime import datetime
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # ---------------- Load environment variables ----------------
@@ -32,6 +31,7 @@ class URL(Base):
     link = Column(String(500), nullable=False)
     monitoring = Column(Boolean, default=False)
     interval = Column(Integer, default=60)
+    last_checked = Column(DateTime, nullable=True)
 
 Base.metadata.create_all(engine)
 
@@ -55,10 +55,7 @@ def send_email(subject, body):
 def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message
-        }
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
         requests.post(url, data=payload)
         print("[INFO] Telegram message sent.")
     except Exception as e:
@@ -86,6 +83,11 @@ def monitor_website(url, url_id, interval):
             time.sleep(interval)
             response = requests.get(url)
             current_hash = hashlib.md5(response.content).hexdigest()
+
+            # Update last checked timestamp
+            url_obj.last_checked = datetime.now()
+            session.commit()
+
             if current_hash != old_hash:
                 print(f"[INFO] Change detected on {url} at {datetime.now()}")
                 message = f"🔔 Change detected on: {url} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -96,6 +98,8 @@ def monitor_website(url, url_id, interval):
                 print(f"[DEBUG] No change at {datetime.now()}")
         except Exception as e:
             print(f"[ERROR] Error during monitoring: {e}")
+        finally:
+            session.close()
 
 # ---------------- Streamlit App ----------------
 st.set_page_config(page_title="Website Change Monitor", layout="centered")
@@ -107,6 +111,10 @@ if "ping" in query_params:
     st.stop()  # Stop execution after responding
 
 st.title("🔍 Website Change Monitor")
+
+# Auto-refresh every 30 seconds (shows new timestamps without reload)
+st_autorefresh = st.experimental_rerun if not hasattr(st, "autorefresh") else st.autorefresh
+st_autorefresh(interval=30 * 1000, key="data_refresh")
 
 # Auto-resume monitoring on app restart
 for url in db_session.query(URL).filter_by(monitoring=True).all():
@@ -132,14 +140,17 @@ urls = db_session.query(URL).all()
 st.subheader("Tracked URLs")
 
 for url in urls:
-    cols = st.columns([4, 1, 1, 1])
+    cols = st.columns([4, 2, 1, 1, 1])
+    last_time = url.last_checked.strftime("%Y-%m-%d %H:%M:%S") if url.last_checked else "Never"
     cols[0].write(f"**{url.link}** ({url.interval}s)")
+    cols[1].write(f"🕒 Last checked: {last_time}")
+
     if url.monitoring:
         cols[0].markdown('<span style="color:green;">Monitoring</span>', unsafe_allow_html=True)
     else:
         cols[0].markdown('<span style="color:gray;">Idle</span>', unsafe_allow_html=True)
 
-    if cols[1].button("▶️ Start", key=f"start_{url.id}"):
+    if cols[2].button("▶️ Start", key=f"start_{url.id}"):
         if not url.monitoring:
             url.monitoring = True
             db_session.commit()
@@ -148,12 +159,12 @@ for url in urls:
             thread.start()
             st.rerun()
 
-    if cols[2].button("⛔ Stop", key=f"stop_{url.id}"):
+    if cols[3].button("⛔ Stop", key=f"stop_{url.id}"):
         url.monitoring = False
         db_session.commit()
         st.rerun()
 
-    if cols[3].button("🗑 Delete", key=f"delete_{url.id}"):
+    if cols[4].button("🗑 Delete", key=f"delete_{url.id}"):
         url.monitoring = False
         db_session.delete(url)
         db_session.commit()
