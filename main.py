@@ -1,182 +1,164 @@
 import streamlit as st
-import sqlite3
 import requests
 import hashlib
-import time
+import os
+import smtplib
 import threading
+import time
 from datetime import datetime
+from email.mime.text import MIMEText
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, Column, Integer, String, Boolean
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-# =========================================================
-# ✅ CONFIGURATION
-# =========================================================
-DB_PATH = "websites.db"
-CHECK_INTERVAL = 5  # seconds between monitoring cycles (global)
+# ---------------- Setup ----------------
+load_dotenv()
 
-# =========================================================
-# ✅ DATABASE FUNCTIONS
-# =========================================================
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS websites (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT,
-            interval INTEGER,
-            monitoring INTEGER,
-            last_hash TEXT,
-            last_checked TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def get_websites():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT * FROM websites")
-    rows = c.fetchall()
-    conn.close()
-    return rows
+Base = declarative_base()
+engine = create_engine("sqlite:///urls.db")
+Session = sessionmaker(bind=engine)
+Base.metadata.create_all(engine)
 
-def add_website(url, interval):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT INTO websites (url, interval, monitoring, last_hash, last_checked) VALUES (?, ?, 1, '', '')",
-              (url, interval))
-    conn.commit()
-    conn.close()
 
-def update_website(site_id, new_hash):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        "UPDATE websites SET last_hash=?, last_checked=? WHERE id=?",
-        (new_hash, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), site_id)
-    )
-    conn.commit()
-    conn.close()
+class URL(Base):
+    __tablename__ = "urls"
+    id = Column(Integer, primary_key=True)
+    link = Column(String(500), nullable=False)
+    monitoring = Column(Boolean, default=False)
+    interval = Column(Integer, default=60)
 
-def toggle_monitoring(site_id, status):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE websites SET monitoring=? WHERE id=?", (1 if status else 0, site_id))
-    conn.commit()
-    conn.close()
 
-# =========================================================
-# ✅ WEB SCRAPING AND HASHING
-# =========================================================
-def get_hash(url):
+# ---------------- Helpers ----------------
+def send_email(subject, body):
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        print("[WARN] Email credentials missing.")
+        return
     try:
-        r = requests.get(url, timeout=15, verify=True)
-        return hashlib.md5(r.text.encode("utf-8")).hexdigest()
+        msg = MIMEText(body)
+        msg["From"] = EMAIL_SENDER
+        msg["To"] = EMAIL_RECEIVER
+        msg["Subject"] = subject
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        print("[INFO] Email sent.")
     except Exception as e:
-        print(f"[ERROR] Failed to fetch {url}: {e}")
-        return None
+        print(f"[ERROR] Email failed: {e}")
 
-# =========================================================
-# ✅ MONITORING LOOP
-# =========================================================
-def monitor_loop():
-    while st.session_state.get("monitoring_active", False):
-        sites = get_websites()
-        for site in sites:
-            site_id, url, interval, monitoring, last_hash, last_checked = site
-            if monitoring:
-                new_hash = get_hash(url)
-                if new_hash:
-                    if last_hash and new_hash != last_hash:
-                        st.session_state["logs"].append(
-                            f"🔄 Change detected on {url} at {datetime.now().strftime('%H:%M:%S')}"
-                        )
-                    update_website(site_id, new_hash)
-                time.sleep(interval)
-        time.sleep(CHECK_INTERVAL)
 
-# =========================================================
-# ✅ STREAMLIT UI
-# =========================================================
-st.set_page_config(page_title="Website Change Tracker", page_icon="🌐", layout="centered")
-st.title("🌐 Website Change Tracker")
-st.write("Monitor any webpage for content changes automatically.")
+def send_telegram(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[WARN] Telegram credentials missing.")
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+        print("[INFO] Telegram message sent.")
+    except Exception as e:
+        print(f"[ERROR] Telegram failed: {e}")
 
-init_db()
 
-# Session state setup
-if "logs" not in st.session_state:
-    st.session_state["logs"] = []
-if "monitoring_active" not in st.session_state:
-    st.session_state["monitoring_active"] = False
-if "thread_running" not in st.session_state:
-    st.session_state["thread_running"] = False
+def monitor_website(url, url_id, interval):
+    """Runs in a background thread."""
+    print(f"👀 Monitoring {url}")
+    try:
+        response = requests.get(url, timeout=10)
+        old_hash = hashlib.md5(response.content).hexdigest()
+    except Exception as e:
+        print(f"[ERROR] Initial fetch failed for {url}: {e}")
+        return
 
-# ---------------------------------------------------------
-# Add website
-st.subheader("➕ Add a Website to Monitor")
-url = st.text_input("Enter website URL")
-interval = st.number_input("Check interval (seconds)", 10, 3600, 60)
-if st.button("Add Website"):
-    if url:
-        add_website(url, interval)
-        st.success(f"✅ Added {url} (every {interval}s)")
-    else:
-        st.error("⚠️ Please enter a valid URL.")
+    while True:
+        session = Session()
+        url_obj = session.query(URL).get(url_id)
+        if not url_obj or not url_obj.monitoring:
+            print(f"[INFO] Monitoring stopped for {url}")
+            session.close()
+            break
 
-# ---------------------------------------------------------
-# Start / Stop monitoring buttons
-st.subheader("🧠 Monitoring Controls")
-col1, col2 = st.columns(2)
+        try:
+            time.sleep(interval)
+            response = requests.get(url, timeout=10)
+            current_hash = hashlib.md5(response.content).hexdigest()
 
-with col1:
-    if st.button("▶️ Start Monitoring"):
-        if not st.session_state["monitoring_active"]:
-            st.session_state["monitoring_active"] = True
-            if not st.session_state["thread_running"]:
-                threading.Thread(target=monitor_loop, daemon=True).start()
-                st.session_state["thread_running"] = True
-            st.success("Monitoring started ✅")
+            if current_hash != old_hash:
+                print(f"[CHANGE] {url} changed at {datetime.now()}")
+                message = f"🔔 Change detected on: {url} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                send_email("Website Content Changed", message)
+                send_telegram(message)
+                old_hash = current_hash
+            else:
+                print(f"[DEBUG] No change for {url} at {datetime.now()}")
+        except Exception as e:
+            print(f"[ERROR] During monitoring of {url}: {e}")
+        finally:
+            session.close()
 
-with col2:
-    if st.button("⏹️ Stop Monitoring"):
-        st.session_state["monitoring_active"] = False
-        st.warning("Monitoring stopped ⏸️")
 
-# ---------------------------------------------------------
-# Display monitored sites
-st.subheader("📋 Tracked Websites")
-sites = get_websites()
-if sites:
-    for site in sites:
-        site_id, url, interval, monitoring, last_hash, last_checked = site
-        st.write(
-            f"🌍 {url} | Every {interval}s | {'🟢 Active' if monitoring else '🔴 Paused'}"
-        )
-        colA, colB = st.columns(2)
-        with colA:
-            if st.button(f"Pause {site_id}", key=f"pause_{site_id}"):
-                toggle_monitoring(site_id, False)
-                st.experimental_rerun()
-        with colB:
-            if st.button(f"Resume {site_id}", key=f"resume_{site_id}"):
-                toggle_monitoring(site_id, True)
-                st.experimental_rerun()
-else:
-    st.info("No websites being monitored yet. Add one above to get started!")
+# ---------------- Ping Endpoint ----------------
+def serve_ping():
+    """Simple endpoint to confirm app is alive."""
+    st.set_page_config(page_title="Ping")
+    st.write("✅ Pong! The app is alive.")
+    st.stop()
 
-# ---------------------------------------------------------
-# Logs
-st.subheader("📜 Activity Log")
-if st.session_state["logs"]:
-    for log in st.session_state["logs"][-10:][::-1]:
-        st.write(log)
-else:
-    st.write("🕓 Waiting for updates...")
 
-# =========================================================
-# ✅ AUTO-START MONITORING ON LAUNCH
-# =========================================================
-if not st.session_state["thread_running"]:
-    st.session_state["monitoring_active"] = True
-    threading.Thread(target=monitor_loop, daemon=True).start()
-    st.session_state["thread_running"] = True
+# ---------------- Streamlit UI ----------------
+if st.query_params.get("ping") == "1":
+    serve_ping()
+
+st.set_page_config(page_title="Website Change Monitor", layout="centered")
+st.title("🔍 Website Change Monitor")
+
+# DB session
+session = Session()
+
+# Add new URL form
+with st.form("add_url_form"):
+    link = st.text_input("Enter URL")
+    interval = st.number_input("Check every (seconds)", min_value=10, value=60)
+    submitted = st.form_submit_button("➕ Add URL")
+    if submitted and link:
+        new_url = URL(link=link, interval=interval)
+        session.add(new_url)
+        session.commit()
+        st.success(f"Added {link} with interval {interval}s")
+        st.rerun()
+
+urls = session.query(URL).all()
+st.subheader("Tracked URLs")
+
+for url in urls:
+    cols = st.columns([4, 1, 1, 1])
+    status = "🟢 Monitoring" if url.monitoring else "⚪ Idle"
+    cols[0].markdown(f"**{url.link}** ({url.interval}s) — {status}")
+
+    if cols[1].button("▶️ Start", key=f"start_{url.id}"):
+        if not url.monitoring:
+            url.monitoring = True
+            session.commit()
+            t = threading.Thread(target=monitor_website, args=(url.link, url.id, url.interval), daemon=True)
+            t.start()
+            st.success(f"Started monitoring {url.link}")
+            st.rerun()
+
+    if cols[2].button("⛔ Stop", key=f"stop_{url.id}"):
+        url.monitoring = False
+        session.commit()
+        st.info(f"Stopped monitoring {url.link}")
+        st.rerun()
+
+    if cols[3].button("🗑 Delete", key=f"delete_{url.id}"):
+        url.monitoring = False
+        session.delete(url)
+        session.commit()
+        st.warning(f"Deleted {url.link}")
+        st.rerun()
+
+session.close()
