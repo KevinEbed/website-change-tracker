@@ -3,156 +3,181 @@ import requests
 import hashlib
 import json
 import os
+import smtplib
+import threading
 import time
+import certifi
 from datetime import datetime
+from email.mime.text import MIMEText
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from dotenv import load_dotenv
 
-# ---------------------------
-# Configuration
-# ---------------------------
-DATA_FILE = "data.json"
-CHECK_INTERVAL_MINUTES = 30  # how often to auto-check in minutes
-ALERT_SOUND_URL = "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
+# ---------------- Setup ----------------
+st.set_page_config(page_title="Website Change Tracker", layout="centered")
 
-# ---------------------------
-# Utility functions
-# ---------------------------
+load_dotenv()
 
-def load_data():
-    """Load saved tracking data from JSON."""
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"tracked_urls": []}
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+DATA_FILE = "urls.json"
+if not os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "w") as f:
+        json.dump([], f)
 
 
-def save_data(data):
-    """Save tracking data to JSON."""
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
+# ---------------- Helpers ----------------
+def send_email(subject, body):
+    """Send an email notification."""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        print("[WARN] Missing email credentials.")
+        return
+    try:
+        msg = MIMEText(body)
+        msg["From"] = EMAIL_SENDER
+        msg["To"] = EMAIL_RECEIVER
+        msg["Subject"] = subject
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        print("[INFO] Email sent.")
+    except Exception as e:
+        print(f"[ERROR] Failed to send email: {e}")
+
+
+def send_telegram(message):
+    """Send a Telegram message."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[WARN] Missing Telegram credentials.")
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+        print("[INFO] Telegram message sent.")
+    except Exception as e:
+        print(f"[ERROR] Telegram failed: {e}")
+
+
+def load_urls():
+    """Load URLs from the JSON file."""
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
+
+
+def save_urls(data):
+    """Save URLs to the JSON file."""
+    with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
 
 def get_page_hash(url):
-    """Fetch a URL and return its content hash."""
+    """Fetch a URL and return its content hash using safe SSL and retries."""
+    session = requests.Session()
+    retry = Retry(connect=3, backoff_factor=2)
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
     try:
-        response = requests.get(url, timeout=15)
+        response = session.get(url, timeout=15, verify=certifi.where())
         response.raise_for_status()
         return hashlib.sha256(response.text.encode("utf-8")).hexdigest()
     except Exception as e:
         st.error(f"❌ Error fetching {url}: {e}")
+        print(f"[ERROR] {url} fetch failed: {e}")
         return None
 
 
-def check_for_changes(entry):
-    """Check if a website changed and return update status."""
-    current_hash = get_page_hash(entry["url"])
-    if current_hash:
-        if current_hash != entry["last_hash"]:
-            entry["status"] = "🟡 Updated!"
-            entry["last_hash"] = current_hash
-            entry["last_checked"] = str(datetime.now())
-            save_data(data)
-            st.success(f"✅ Change detected for: {entry['url']}")
-            st.audio(ALERT_SOUND_URL)
-        else:
-            entry["status"] = "🟢 No Change"
-            entry["last_checked"] = str(datetime.now())
-            save_data(data)
-            st.info(f"No changes found for: {entry['url']}")
+def monitor_website(url_entry):
+    """Background thread to monitor a single URL."""
+    url = url_entry["link"]
+    interval = url_entry["interval"]
+    print(f"👀 Monitoring {url}")
+
+    old_hash = get_page_hash(url)
+    if not old_hash:
+        print(f"[ERROR] Could not fetch initial content for {url}.")
+        return
+
+    while url_entry["monitoring"]:
+        time.sleep(interval)
+        current_hash = get_page_hash(url)
+        if not current_hash:
+            continue
+
+        if current_hash != old_hash:
+            print(f"[CHANGE] {url} changed at {datetime.now()}")
+            message = f"🔔 Change detected on:\n{url}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            send_email("Website Content Changed", message)
+            send_telegram(message)
+            old_hash = current_hash
+
+        urls = load_urls()
+        for entry in urls:
+            if entry["link"] == url:
+                url_entry["monitoring"] = entry["monitoring"]
+        save_urls(urls)
+
+        if not url_entry["monitoring"]:
+            print(f"[INFO] Stopped monitoring {url}")
+            break
 
 
-# ---------------------------
-# Streamlit UI setup
-# ---------------------------
-
-st.set_page_config(page_title="Website Change Tracker", layout="wide")
-
+# ---------------- Streamlit UI ----------------
 st.title("🔍 Website Change Tracker")
-st.caption("Monitor any web page for updates — perfect for apartment listings, news, or offers.")
 
-data = load_data()
+urls = load_urls()
 
-# Sidebar for adding/removing URLs
-st.sidebar.header("⚙️ Settings")
+# Add new URL form
+with st.form("add_url_form"):
+    link = st.text_input("Enter URL")
+    interval = st.number_input("Check every (seconds)", min_value=10, value=60)
+    submitted = st.form_submit_button("➕ Add URL")
 
-new_url = st.sidebar.text_input("Enter a URL to track:")
+    if submitted and link:
+        new_entry = {"link": link, "interval": interval, "monitoring": False}
+        urls.append(new_entry)
+        save_urls(urls)
+        st.success(f"✅ Added {link} with interval {interval}s")
+        st.rerun()
 
-if st.sidebar.button("➕ Add URL"):
-    if new_url.strip() == "":
-        st.sidebar.warning("Please enter a valid URL.")
-    elif any(u["url"] == new_url for u in data["tracked_urls"]):
-        st.sidebar.info("That URL is already being tracked.")
-    else:
-        page_hash = get_page_hash(new_url)
-        if page_hash:
-            data["tracked_urls"].append({
-                "url": new_url,
-                "last_hash": page_hash,
-                "last_checked": str(datetime.now()),
-                "status": "🟢 No Change Yet"
-            })
-            save_data(data)
-            st.sidebar.success("✅ URL added successfully!")
+# Display tracked URLs
+st.subheader("Tracked URLs")
 
-# Remove URLs
-if data["tracked_urls"]:
-    url_to_remove = st.sidebar.selectbox("Select URL to remove:", [u["url"] for u in data["tracked_urls"]])
-    if st.sidebar.button("❌ Remove Selected"):
-        data["tracked_urls"] = [u for u in data["tracked_urls"] if u["url"] != url_to_remove]
-        save_data(data)
-        st.sidebar.success("🗑️ URL removed successfully!")
-
-# ---------------------------
-# Main dashboard
-# ---------------------------
-
-st.subheader("📋 Tracked Websites")
-
-if not data["tracked_urls"]:
-    st.info("No URLs are being tracked yet. Add one from the sidebar.")
+if not urls:
+    st.info("No URLs are being tracked yet. Add one above.")
 else:
-    for entry in data["tracked_urls"]:
-        col1, col2, col3, col4 = st.columns([4, 2, 2, 2])
+    for i, entry in enumerate(urls):
+        cols = st.columns([4, 1, 1, 1])
+        status = "🟢 Monitoring" if entry["monitoring"] else "⚪ Idle"
+        cols[0].markdown(f"**{entry['link']}** ({entry['interval']}s) — {status}")
 
-        with col1:
-            st.markdown(f"[{entry['url']}]({entry['url']})")
+        if cols[1].button("▶️ Start", key=f"start_{i}"):
+            if not entry["monitoring"]:
+                entry["monitoring"] = True
+                save_urls(urls)
+                threading.Thread(target=monitor_website, args=(entry,), daemon=True).start()
+                st.success(f"Started monitoring {entry['link']}")
+                st.rerun()
 
-        with col2:
-            st.write(entry["status"])
+        if cols[2].button("⛔ Stop", key=f"stop_{i}"):
+            entry["monitoring"] = False
+            save_urls(urls)
+            st.info(f"Stopped monitoring {entry['link']}")
+            st.rerun()
 
-        with col3:
-            st.write(entry["last_checked"].split(".")[0])
+        if cols[3].button("🗑 Delete", key=f"delete_{i}"):
+            entry["monitoring"] = False
+            del urls[i]
+            save_urls(urls)
+            st.warning(f"Deleted {entry['link']}")
+            st.rerun()
 
-        with col4:
-            if st.button("🔄 Check Now", key=entry["url"]):
-                check_for_changes(entry)
-
-# ---------------------------
-# Automatic periodic checking
-# ---------------------------
-
-st.markdown("---")
-st.subheader("⏱️ Auto Check Settings")
-
-if "last_auto_check" not in st.session_state:
-    st.session_state.last_auto_check = 0
-
-time_since_last = (time.time() - st.session_state.last_auto_check) / 60
-
-if st.button("🔁 Run Auto Check Now"):
-    for entry in data["tracked_urls"]:
-        check_for_changes(entry)
-    st.session_state.last_auto_check = time.time()
-    st.success("✅ Manual auto-check completed.")
-
-# Auto-check logic
-if time_since_last > CHECK_INTERVAL_MINUTES:
-    st.session_state.last_auto_check = time.time()
-    for entry in data["tracked_urls"]:
-        check_for_changes(entry)
-    st.info(f"⏱️ Auto check performed at {datetime.now().strftime('%H:%M:%S')}")
-
-# ---------------------------
 # Footer
-# ---------------------------
 st.markdown("---")
-st.caption("💡 Tip: Leave this app open — it auto-checks your tracked websites every 30 minutes and alerts you when changes occur.")
+st.caption("🧠 Built with ❤️ using Streamlit, Python, and Certifi for safe HTTPS handling.")
