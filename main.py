@@ -21,11 +21,13 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 Base = declarative_base()
-engine = create_engine("sqlite:///urls.db")
+
+# ✅ Thread-safe SQLite connection
+engine = create_engine("sqlite:///urls.db", connect_args={"check_same_thread": False})
 Session = sessionmaker(bind=engine)
-Base.metadata.create_all(engine)
 
 
+# ---------------- Database Model ----------------
 class URL(Base):
     __tablename__ = "urls"
     id = Column(Integer, primary_key=True)
@@ -34,9 +36,13 @@ class URL(Base):
     interval = Column(Integer, default=60)
 
 
+# ✅ Create tables AFTER defining the model
+Base.metadata.create_all(engine)
+
+
 # ---------------- Helpers ----------------
 def send_email(subject, body):
-    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
         print("[WARN] Email credentials missing.")
         return
     try:
@@ -47,7 +53,7 @@ def send_email(subject, body):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
             server.send_message(msg)
-        print("[INFO] Email sent.")
+        print("[INFO] Email sent successfully.")
     except Exception as e:
         print(f"[ERROR] Email failed: {e}")
 
@@ -76,7 +82,7 @@ def monitor_website(url, url_id, interval):
 
     while True:
         session = Session()
-        url_obj = session.query(URL).get(url_id)
+        url_obj = session.get(URL, url_id)
         if not url_obj or not url_obj.monitoring:
             print(f"[INFO] Monitoring stopped for {url}")
             session.close()
@@ -89,7 +95,7 @@ def monitor_website(url, url_id, interval):
 
             if current_hash != old_hash:
                 print(f"[CHANGE] {url} changed at {datetime.now()}")
-                message = f"🔔 Change detected on: {url} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                message = f"🔔 Change detected on: {url}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 send_email("Website Content Changed", message)
                 send_telegram(message)
                 old_hash = current_hash
@@ -116,7 +122,6 @@ if st.query_params.get("ping") == "1":
 st.set_page_config(page_title="Website Change Monitor", layout="centered")
 st.title("🔍 Website Change Monitor")
 
-# DB session
 session = Session()
 
 # Add new URL form
@@ -125,40 +130,51 @@ with st.form("add_url_form"):
     interval = st.number_input("Check every (seconds)", min_value=10, value=60)
     submitted = st.form_submit_button("➕ Add URL")
     if submitted and link:
-        new_url = URL(link=link, interval=interval)
-        session.add(new_url)
-        session.commit()
-        st.success(f"Added {link} with interval {interval}s")
-        st.rerun()
+        existing = session.query(URL).filter_by(link=link).first()
+        if existing:
+            st.warning("URL already exists.")
+        else:
+            new_url = URL(link=link, interval=interval)
+            session.add(new_url)
+            session.commit()
+            st.success(f"Added {link} with interval {interval}s")
+            st.rerun()
 
 urls = session.query(URL).all()
 st.subheader("Tracked URLs")
 
-for url in urls:
-    cols = st.columns([4, 1, 1, 1])
-    status = "🟢 Monitoring" if url.monitoring else "⚪ Idle"
-    cols[0].markdown(f"**{url.link}** ({url.interval}s) — {status}")
+if not urls:
+    st.info("No URLs being tracked yet. Add one above.")
+else:
+    for url in urls:
+        cols = st.columns([4, 1, 1, 1])
+        status = "🟢 Monitoring" if url.monitoring else "⚪ Idle"
+        cols[0].markdown(f"**{url.link}** ({url.interval}s) — {status}")
 
-    if cols[1].button("▶️ Start", key=f"start_{url.id}"):
-        if not url.monitoring:
-            url.monitoring = True
+        if cols[1].button("▶️ Start", key=f"start_{url.id}"):
+            if not url.monitoring:
+                url.monitoring = True
+                session.commit()
+                t = threading.Thread(
+                    target=monitor_website,
+                    args=(url.link, url.id, url.interval),
+                    daemon=True,
+                )
+                t.start()
+                st.success(f"Started monitoring {url.link}")
+                st.rerun()
+
+        if cols[2].button("⛔ Stop", key=f"stop_{url.id}"):
+            url.monitoring = False
             session.commit()
-            t = threading.Thread(target=monitor_website, args=(url.link, url.id, url.interval), daemon=True)
-            t.start()
-            st.success(f"Started monitoring {url.link}")
+            st.info(f"Stopped monitoring {url.link}")
             st.rerun()
 
-    if cols[2].button("⛔ Stop", key=f"stop_{url.id}"):
-        url.monitoring = False
-        session.commit()
-        st.info(f"Stopped monitoring {url.link}")
-        st.rerun()
-
-    if cols[3].button("🗑 Delete", key=f"delete_{url.id}"):
-        url.monitoring = False
-        session.delete(url)
-        session.commit()
-        st.warning(f"Deleted {url.link}")
-        st.rerun()
+        if cols[3].button("🗑 Delete", key=f"delete_{url.id}"):
+            url.monitoring = False
+            session.delete(url)
+            session.commit()
+            st.warning(f"Deleted {url.link}")
+            st.rerun()
 
 session.close()
