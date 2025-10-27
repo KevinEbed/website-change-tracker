@@ -40,32 +40,60 @@ st.markdown("""
         margin-bottom: 1rem;
     }
     .notification-card {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        padding: 1.5rem;
+        border-radius: 0.75rem;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        font-weight: 500;
+        font-size: 1.1rem;
+        transition: all 0.3s ease;
+    }
+    .notification-card:hover {
+        box-shadow: 0 6px 12px rgba(0,0,0,0.2);
+        transform: translateY(-2px);
     }
     .success {
-        background-color: #E8F5E9;
-        border-left: 4px solid #4CAF50;
+        background: linear-gradient(135deg, #E8F5E9, #C8E6C9);
+        border-left: 6px solid #4CAF50;
+        color: #2E7D32;
     }
     .warning {
-        background-color: #FFF3E0;
-        border-left: 4px solid #FF9800;
+        background: linear-gradient(135deg, #FFF3E0, #FFE0B2);
+        border-left: 6px solid #FF9800;
+        color: #EF6C00;
     }
     .error {
-        background-color: #FFEBEE;
-        border-left: 4px solid #F44336;
+        background: linear-gradient(135deg, #FFEBEE, #FFCDD2);
+        border-left: 6px solid #F44336;
+        color: #C62828;
     }
     .info {
-        background-color: #E3F2FD;
-        border-left: 4px solid #2196F3;
+        background: linear-gradient(135deg, #E3F2FD, #BBDEFB);
+        border-left: 6px solid #2196F3;
+        color: #1565C0;
+    }
+    .highlight {
+        background: linear-gradient(135deg, #F3E5F5, #E1BEE7);
+        border-left: 6px solid #9C27B0;
+        color: #6A1B9A;
+        font-weight: bold;
+        text-align: center;
+        font-size: 1.2rem;
+        padding: 2rem;
     }
     .footer {
         text-align: center;
-        padding: 1rem;
+        padding: 1.5rem;
         color: #757575;
         font-size: 0.9rem;
+        margin-top: 2rem;
+        border-top: 1px solid #E0E0E0;
+    }
+    .url-display {
+        font-weight: bold;
+        color: #1976D2;
+        word-break: break-all;
+        font-size: 1.05rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -197,32 +225,67 @@ if url.strip() != "":
 
                 if prev_hash is None:
                     prev_hash = current_hash
-                    placeholder.markdown(f"<div class='notification-card success'>✅ Monitoring started for {url}. Waiting for changes...</div>", unsafe_allow_html=True)
+                    placeholder.markdown(f"""
+                    <div class='notification-card highlight'>
+                        ✅ Monitoring started successfully!<br>
+                        <span class='url-display'>{url}</span><br>
+                        Waiting for changes...
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 elif current_hash != prev_hash:
                     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.markdown(f"<div class='notification-card error'>🚨 Change Detected at {timestamp}!</div>", unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div class='notification-card error'>
+                        🚨 Change Detected at {timestamp}!<br>
+                        <span class='url-display'>{url}</span><br>
+                        Content has been modified.
+                    </div>
+                    """, unsafe_allow_html=True)
                     send_email_notification(url)
                     send_telegram_notification(url)
                     save_to_history(url, timestamp)
                     prev_hash = current_hash
                 else:
                     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    placeholder.markdown(f"<div class='notification-card info'>🔁 Refresh #{refresh_count + 1} at {timestamp} - No changes detected</div>", unsafe_allow_html=True)
+                    placeholder.markdown(f"""
+                    <div class='notification-card info'>
+                        🔁 Refresh #{refresh_count + 1} at {timestamp}<br>
+                        <span class='url-display'>{url}</span><br>
+                        No changes detected.
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 refresh_count += 1
                 time.sleep(refresh_interval)
 
             except requests.exceptions.SSLError as e:
                 error_msg = f"🔒 SSL Certificate Error: {str(e)}"
-                st.markdown(f"<div class='notification-card error'>{error_msg}</div>", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class='notification-card error'>
+                    {error_msg}<br>
+                    <span class='url-display'>{url}</span>
+                </div>
+                """, unsafe_allow_html=True)
                 st.info("💡 Tip: Try enabling 'Skip SSL Verification' in settings if this is a known issue with the website.")
                 break
             except requests.exceptions.RequestException as e:
-                st.markdown(f"<div class='notification-card error'>❌ Network error while checking the website: {e}</div>", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class='notification-card error'>
+                    ❌ Network error while checking the website:<br>
+                    <span class='url-display'>{url}</span><br>
+                    Error: {e}
+                </div>
+                """, unsafe_allow_html=True)
                 break
             except Exception as e:
-                st.markdown(f"<div class='notification-card error'>❌ Error while checking the website: {e}</div>", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class='notification-card error'>
+                    ❌ Error while checking the website:<br>
+                    <span class='url-display'>{url}</span><br>
+                    Error: {e}
+                </div>
+                """, unsafe_allow_html=True)
                 break
 else:
     st.info("ℹ️ Please enter a URL above to begin monitoring.")
