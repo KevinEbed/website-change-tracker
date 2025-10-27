@@ -226,6 +226,43 @@ def edit_website(site_id):
 def confirm_delete_website(site_id):
     st.session_state.delete_confirm = site_id
 
+# Send email notification
+def send_email_notification(url, site_name):
+    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
+        return False
+        
+    try:
+        subject = "🔔 Website Change Detected"
+        body = f"A change was detected on the website: {site_name}\nURL: {url}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_SENDER
+        msg["To"] = EMAIL_RECEIVER
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Email error: {e}")
+        return False
+
+# Send Telegram notification
+def send_telegram_notification(url, site_name):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+        
+    try:
+        message = f"🔔 Change detected on {site_name}\nURL: {url}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        response = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": message}
+        )
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Telegram error: {e}")
+        return False
+
 # Load websites on app start
 load_websites()
 
@@ -338,7 +375,48 @@ if st.session_state.websites:
     
     # Manual check button
     if st.button("🔍 Check All Websites Now"):
-        st.info("Manual check functionality would be implemented here")
+        st.info("Checking all websites for changes...")
+        changes_detected = []
+        
+        for site in st.session_state.websites:
+            try:
+                # Configure request based on SSL setting
+                if skip_ssl_verification:
+                    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                    response = requests.get(site["url"], timeout=10, verify=False)
+                else:
+                    response = requests.get(site["url"], timeout=10)
+                
+                content = response.text
+                current_hash = hashlib.md5(content.encode()).hexdigest()
+                
+                # Update last checked time
+                site["last_checked"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
+                if site.get("current_hash") is None:
+                    site["current_hash"] = current_hash
+                elif current_hash != site["current_hash"]:
+                    # Change detected
+                    site["last_changed"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    site["current_hash"] = current_hash
+                    changes_detected.append(site)
+                    
+                    # Send notifications
+                    site_name = site.get('name', site['url'])
+                    if enable_email:
+                        send_email_notification(site["url"], site_name)
+                    if enable_telegram:
+                        send_telegram_notification(site["url"], site_name)
+                        
+            except Exception as e:
+                print(f"Error checking {site['url']}: {e}")
+        
+        save_websites()
+        
+        if changes_detected:
+            st.success(f"Changes detected on {len(changes_detected)} website(s). Notifications sent.")
+        else:
+            st.info("No changes detected on any websites.")
 else:
     st.info("ℹ️ No websites are currently being monitored. Add a website using the form in the sidebar.")
 
@@ -388,40 +466,33 @@ if st.session_state.websites:
 
                     if prev_hash is None:
                         prev_hash = current_hash
-                        placeholder.markdown(f"""
-                        <div class='notification-card highlight'>
-                            ✅ Monitoring started successfully!<br>
-                            <span class='url-display'>{selected_site['url']}</span><br>
-                            Waiting for changes...
-                        </div>
-                        """, unsafe_allow_html=True)
+                        # Update website data
+                        for site in st.session_state.websites:
+                            if site["url"] == selected_site["url"]:
+                                site["last_checked"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                break
+                        save_websites()
 
                     elif current_hash != prev_hash:
                         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        st.markdown(f"""
-                        <div class='notification-card error'>
-                            🚨 Change Detected at {timestamp}!<br>
-                            <span class='url-display'>{selected_site['url']}</span><br>
-                            Content has been modified.
-                        </div>
-                        """, unsafe_allow_html=True)
+                        # Send notifications only
+                        site_name = selected_site.get('name', selected_site['url'])
+                        if enable_email:
+                            email_sent = send_email_notification(selected_site["url"], site_name)
+                        if enable_telegram:
+                            telegram_sent = send_telegram_notification(selected_site["url"], site_name)
+                        
                         # Update website data
                         for site in st.session_state.websites:
                             if site["url"] == selected_site["url"]:
                                 site["last_changed"] = timestamp
                                 site["current_hash"] = current_hash
+                                site["last_checked"] = timestamp
                                 break
                         save_websites()
                         prev_hash = current_hash
                     else:
                         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        placeholder.markdown(f"""
-                        <div class='notification-card info'>
-                            🔁 Refresh #{refresh_count + 1} at {timestamp}<br>
-                            <span class='url-display'>{selected_site['url']}</span><br>
-                            No changes detected.
-                        </div>
-                        """, unsafe_allow_html=True)
                         # Update website data
                         for site in st.session_state.websites:
                             if site["url"] == selected_site["url"]:
@@ -434,31 +505,13 @@ if st.session_state.websites:
 
                 except requests.exceptions.SSLError as e:
                     error_msg = f"🔒 SSL Certificate Error: {str(e)}"
-                    st.markdown(f"""
-                    <div class='notification-card error'>
-                        {error_msg}<br>
-                        <span class='url-display'>{selected_site['url']}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    st.info("💡 Tip: Try enabling 'Skip SSL Verification' in settings if this is a known issue with the website.")
+                    print(f"SSL Error for {selected_site['url']}: {error_msg}")
                     break
                 except requests.exceptions.RequestException as e:
-                    st.markdown(f"""
-                    <div class='notification-card error'>
-                        ❌ Network error while checking the website:<br>
-                        <span class='url-display'>{selected_site['url']}</span><br>
-                        Error: {e}
-                    </div>
-                    """, unsafe_allow_html=True)
+                    print(f"Network error for {selected_site['url']}: {e}")
                     break
                 except Exception as e:
-                    st.markdown(f"""
-                    <div class='notification-card error'>
-                        ❌ Error while checking the website:<br>
-                        <span class='url-display'>{selected_site['url']}</span><br>
-                        Error: {e}
-                    </div>
-                    """, unsafe_allow_html=True)
+                    print(f"Error checking {selected_site['url']}: {e}")
                     break
 else:
     st.info("ℹ️ Add websites using the form in the sidebar to begin monitoring.")
