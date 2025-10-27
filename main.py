@@ -9,8 +9,16 @@ from email.mime.text import MIMEText
 from datetime import datetime
 import json
 import urllib3
-from bs4 import BeautifulSoup
 import re
+
+# Try to import BeautifulSoup, but handle if it's not available
+try:
+    from bs4 import BeautifulSoup
+    BEAUTIFUL_SOUP_AVAILABLE = True
+except ImportError:
+    BeautifulSoup = None
+    BEAUTIFUL_SOUP_AVAILABLE = False
+    st.warning(" BeautifulSoup library not found. STWDO room detection will use fallback method. Please install with: pip install beautifulsoup4")
 
 # Load environment variables
 load_dotenv()
