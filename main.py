@@ -204,7 +204,8 @@ def add_or_update_website(url, name, interval, active, monitor_type="any_change"
         "last_checked": None,
         "last_changed": None,
         "current_hash": None,
-        "previous_rooms": []
+        "previous_rooms": [],
+        "first_scan_completed": False
     }
     
     # Check if website already exists
@@ -283,40 +284,82 @@ def extract_stwdo_rooms(content):
     rooms = []
     
     # Look for room listings - this may need adjustment based on the actual HTML structure
-    room_elements = soup.find_all(['div', 'article', 'li'], class_=re.compile(r'.*(wohnung|zimmer|angebot|room).*', re.I))
+    # Try multiple approaches to find room listings
     
-    # Also look for elements containing price information
-    price_elements = soup.find_all(text=re.compile(r'€|EUR|Euro', re.I))
+    # Approach 1: Look for elements with common room-related classes
+    room_elements = soup.find_all(['div', 'article', 'li', 'section'], 
+                                 class_=re.compile(r'.*(wohnung|zimmer|angebot|room|listing|item).*', re.I))
     
-    # If we find room-related elements, extract information
+    # Approach 2: Look for elements containing price information
+    price_elements = soup.find_all(text=re.compile(r'€|EUR|Euro|\d+\s*€', re.I))
+    
+    # Approach 3: Look for links that might contain room details
+    link_elements = soup.find_all('a', href=re.compile(r'.*(wohnung|zimmer|angebot).*', re.I))
+    
+    # Process room elements
     for element in room_elements:
         # Get text content
         text = element.get_text(strip=True)
         if text and len(text) > 20:  # Only consider substantial content
-            # Look for price indicators
-            if '€' in text or 'EUR' in text or 'Euro' in text:
-                rooms.append(text[:200])  # Limit to first 200 chars
+            # Create a unique identifier for this room based on key details
+            identifier = text[:100].strip()  # Use first 100 chars as identifier
+            rooms.append({
+                "id": hashlib.md5(identifier.encode()).hexdigest()[:12],
+                "content": identifier,
+                "full_content": text[:300]  # Store first 300 chars for reference
+            })
     
-    # If no room elements found, try a different approach
-    if not rooms:
-        # Look for any elements with pricing information
+    # Process price elements if we haven't found enough rooms
+    if len(rooms) < 5:  # Arbitrary threshold
         for price_element in price_elements:
             parent = price_element.parent
             if parent:
                 text = parent.get_text(strip=True)
                 if text and len(text) > 20:
-                    rooms.append(text[:200])
+                    identifier = text[:100].strip()
+                    rooms.append({
+                        "id": hashlib.md5(identifier.encode()).hexdigest()[:12],
+                        "content": identifier,
+                        "full_content": text[:300]
+                    })
     
-    return rooms
+    # Process link elements if we haven't found enough rooms
+    if len(rooms) < 5:
+        for link_element in link_elements:
+            # Check if link_element is a tag (not a NavigableString)
+            if hasattr(link_element, 'get_text'):
+                text = link_element.get_text(strip=True)
+                if text and len(text) > 10:
+                    href = link_element.get('href', '') if hasattr(link_element, 'get') else ''
+                    identifier = f"{text[:50]}_{href[:50]}".strip() if href else text[:50].strip()
+                    full_content = f"{text} - {href}"[:300] if href else text[:300]
+                    rooms.append({
+                        "id": hashlib.md5(identifier.encode()).hexdigest()[:12],
+                        "content": identifier,
+                        "full_content": full_content
+                    })
+    
+    # Remove duplicates based on ID
+    unique_rooms = []
+    seen_ids = set()
+    for room in rooms:
+        if room["id"] not in seen_ids:
+            unique_rooms.append(room)
+            seen_ids.add(room["id"])
+    
+    return unique_rooms
 
 # Detect new rooms on STWDO website
 def detect_new_rooms(current_content, previous_rooms):
     current_rooms = extract_stwdo_rooms(current_content)
     
+    # Convert previous_rooms to set of IDs for comparison
+    previous_room_ids = set(room["id"] for room in previous_rooms)
+    
     # Find new rooms (in current but not in previous)
     new_rooms = []
     for room in current_rooms:
-        if room not in previous_rooms:
+        if room["id"] not in previous_room_ids:
             new_rooms.append(room)
     
     return new_rooms, current_rooms
@@ -463,12 +506,17 @@ if st.session_state.websites:
                 if site.get("monitor_type") == "stwdo_rooms" and "stwdo.de" in site["url"]:
                     # Special handling for STWDO room detection
                     previous_rooms = site.get("previous_rooms", [])
+                    first_scan = not site.get("first_scan_completed", False)
+                    
                     new_rooms, current_rooms = detect_new_rooms(content, previous_rooms)
                     
-                    if new_rooms:
-                        # New rooms detected
+                    # Always update the rooms list
+                    site["previous_rooms"] = current_rooms
+                    site["first_scan_completed"] = True
+                    
+                    if not first_scan and new_rooms:
+                        # New rooms detected (not the first scan)
                         site["last_changed"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        site["previous_rooms"] = current_rooms
                         changes_detected.append({
                             "site": site,
                             "new_rooms": new_rooms
@@ -481,9 +529,6 @@ if st.session_state.websites:
                             send_email_notification(site["url"], site_name, message)
                         if enable_telegram:
                             send_telegram_notification(site["url"], site_name, message)
-                    else:
-                        # Update rooms list even if no new rooms
-                        site["previous_rooms"] = current_rooms
                 else:
                     # Regular change detection
                     current_hash = hashlib.md5(content.encode()).hexdigest()
@@ -504,6 +549,7 @@ if st.session_state.websites:
                         if enable_telegram:
                             send_telegram_notification(site["url"], site_name, message)
                         
+                # Save updated website data
                 save_websites()
                         
             except Exception as e:
@@ -530,6 +576,7 @@ if st.session_state.websites:
         placeholder = st.empty()
         prev_hash = selected_site.get("current_hash", None)
         prev_rooms = selected_site.get("previous_rooms", [])
+        first_scan = not selected_site.get("first_scan_completed", False)
         refresh_count = 0
         monitoring = True
 
@@ -567,7 +614,12 @@ if st.session_state.websites:
                         # Special handling for STWDO room detection
                         new_rooms, current_rooms = detect_new_rooms(content, prev_rooms)
                         
-                        if new_rooms:
+                        # Always update the rooms list
+                        selected_site["previous_rooms"] = current_rooms
+                        selected_site["first_scan_completed"] = True
+                        prev_rooms = current_rooms
+                        
+                        if not first_scan and new_rooms:
                             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                             # Send notifications only
                             site_name = selected_site.get('name', selected_site['url'])
@@ -579,12 +631,9 @@ if st.session_state.websites:
                             
                             # Update website data
                             selected_site["last_changed"] = timestamp
-                            selected_site["previous_rooms"] = current_rooms
-                            prev_rooms = current_rooms
-                        else:
-                            # Update rooms list even if no new rooms
-                            selected_site["previous_rooms"] = current_rooms
-                            prev_rooms = current_rooms
+                        elif first_scan:
+                            # Mark first scan as completed
+                            first_scan = False
                     else:
                         # Regular change detection
                         current_hash = hashlib.md5(content.encode()).hexdigest()
