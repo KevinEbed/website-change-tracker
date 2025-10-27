@@ -140,6 +140,15 @@ st.markdown("""
         cursor: pointer;
         margin-right: 0.5rem;
     }
+    .btn-check {
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 0.25rem;
+        cursor: pointer;
+        margin-right: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -149,6 +158,9 @@ if "websites" not in st.session_state:
 
 if "editing_website" not in st.session_state:
     st.session_state.editing_website = None
+
+if "delete_confirm" not in st.session_state:
+    st.session_state.delete_confirm = None
 
 # Header section
 st.markdown("<h1 class='main-header'>🌐 Website Change Detector</h1>", unsafe_allow_html=True)
@@ -200,9 +212,31 @@ def add_or_update_website(url, name, interval, active):
 def delete_website(site_id):
     st.session_state.websites = [site for site in st.session_state.websites if site["id"] != site_id]
     save_websites()
+    st.session_state.delete_confirm = None
+
+# Edit website - set editing state
+def edit_website(site_id):
+    for site in st.session_state.websites:
+        if site["id"] == site_id:
+            st.session_state.editing_website = site
+            break
 
 # Load websites on app start
 load_websites()
+
+# Handle delete confirmation
+if st.session_state.delete_confirm:
+    site_to_delete = st.session_state.delete_confirm
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("✅ Confirm Delete"):
+            delete_website(site_to_delete)
+            st.success("Website deleted successfully!")
+            st.rerun()
+    with col2:
+        if st.button("❌ Cancel"):
+            st.session_state.delete_confirm = None
+            st.rerun()
 
 # Sidebar for adding/editing websites
 with st.sidebar:
@@ -210,36 +244,46 @@ with st.sidebar:
     
     # Form for adding/editing websites
     with st.form("website_form"):
-        url = st.text_input("🔗 Website URL:", placeholder="https://example.com")
-        name = st.text_input("📝 Website Name:", placeholder="My Website")
-        interval = st.number_input("⏱️ Check Interval (seconds):", min_value=30, max_value=3600, value=60, step=30)
-        active = st.checkbox("✅ Active", value=True)
+        # Pre-fill form if editing
+        if st.session_state.editing_website:
+            url = st.text_input("🔗 Website URL:", value=st.session_state.editing_website["url"])
+            name = st.text_input("📝 Website Name:", value=st.session_state.editing_website.get("name", ""))
+            interval = st.number_input("⏱️ Check Interval (seconds):", min_value=30, max_value=3600, 
+                                     value=st.session_state.editing_website["interval"], step=30)
+            active = st.checkbox("✅ Active", value=st.session_state.editing_website["active"])
+        else:
+            url = st.text_input("🔗 Website URL:", placeholder="https://example.com")
+            name = st.text_input("📝 Website Name:", placeholder="My Website")
+            interval = st.number_input("⏱️ Check Interval (seconds):", min_value=30, max_value=3600, value=60, step=30)
+            active = st.checkbox("✅ Active", value=True)
         
         # Buttons
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             submitted = st.form_submit_button("💾 Save Website")
         with col2:
             cancel = st.form_submit_button("❌ Cancel")
+        with col3:
+            if st.session_state.editing_website:
+                delete = st.form_submit_button("🗑️ Delete")
         
         if submitted:
             if url.strip() != "":
                 add_or_update_website(url, name if name.strip() != "" else url, interval, active)
                 st.success("✅ Website saved successfully!")
+                st.session_state.editing_website = None
                 st.rerun()
             else:
                 st.error("❌ Please enter a valid URL")
         
         if cancel:
             st.session_state.editing_website = None
+            st.session_state.delete_confirm = None
             st.rerun()
-    
-    # Edit form for existing website
-    if st.session_state.editing_website is not None:
-        site = st.session_state.editing_website
-        st.markdown("---")
-        st.markdown("<h3 class='sub-header'>✏️ Editing Website</h3>", unsafe_allow_html=True)
-        st.write(f"URL: {site['url']}")
+        
+        if st.session_state.editing_website and 'delete' in locals() and delete:
+            st.session_state.delete_confirm = st.session_state.editing_website["id"]
+            st.rerun()
     
     st.markdown("---")
     st.markdown("<h3 class='sub-header'>⚙️ Global Settings</h3>", unsafe_allow_html=True)
@@ -262,20 +306,6 @@ st.markdown("<h2 class='sub-header'>📋 Monitored Websites</h2>", unsafe_allow_
 
 # Display websites in a table
 if st.session_state.websites:
-    # Create DataFrame for better display
-    df_data = []
-    for site in st.session_state.websites:
-        df_data.append({
-            "Name": site.get("name", site["url"]),
-            "URL": site["url"],
-            "Interval": f"{site['interval']}s",
-            "Status": "Active" if site["active"] else "Inactive",
-            "Last Checked": site["last_checked"] if site["last_checked"] else "Never",
-            "Actions": site["id"]
-        })
-    
-    df = pd.DataFrame(df_data)
-    
     # Display table with custom styling
     st.markdown("""
     <table class="monitoring-table">
@@ -302,8 +332,10 @@ if st.session_state.websites:
             <td><span class="{status_class}">{"Active" if site["active"] else "Inactive"}</span></td>
             <td>{site['last_checked'] if site['last_checked'] else 'Never'}</td>
             <td>
-                <button class="btn-edit" onclick="alert('Edit functionality would go here')">Edit</button>
-                <button class="btn-delete" onclick="alert('Delete functionality would go here')">Delete</button>
+                <form method="post">
+                    <button class="btn-edit" name="edit_site" value="{site['id']}">Edit</button>
+                    <button class="btn-delete" name="delete_site" value="{site['id']}">Delete</button>
+                </form>
             </td>
         </tr>
         """, unsafe_allow_html=True)
@@ -312,6 +344,19 @@ if st.session_state.websites:
         </tbody>
     </table>
     """, unsafe_allow_html=True)
+    
+    # Handle form submissions for edit/delete
+    if "edit_site" in st.experimental_get_query_params():
+        site_id = st.experimental_get_query_params()["edit_site"][0]
+        edit_website(site_id)
+        st.experimental_set_query_params()  # Clear query params
+        st.rerun()
+    
+    if "delete_site" in st.experimental_get_query_params():
+        site_id = st.experimental_get_query_params()["delete_site"][0]
+        st.session_state.delete_confirm = site_id
+        st.experimental_set_query_params()  # Clear query params
+        st.rerun()
     
     # Manual check button
     if st.button("🔍 Check All Websites Now"):
