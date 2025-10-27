@@ -110,18 +110,19 @@ st.markdown("""
         border-radius: 0.25rem;
         font-weight: bold;
     }
-    .monitoring-table {
-        width: 100%;
-        border-collapse: collapse;
-    }
-    .monitoring-table th {
-        background-color: #f5f5f5;
-        text-align: left;
+    .website-card {
+        background: white;
+        border-radius: 0.5rem;
         padding: 1rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border-left: 4px solid #2196F3;
     }
-    .monitoring-table td {
-        padding: 1rem;
-        border-bottom: 1px solid #eee;
+    .website-card.active {
+        border-left: 4px solid #4CAF50;
+    }
+    .website-card.inactive {
+        border-left: 4px solid #F44336;
     }
     .btn-delete {
         background-color: #f44336;
@@ -311,56 +312,26 @@ with st.sidebar:
 # Main content area
 st.markdown("<h2 class='sub-header'>📋 Monitored Websites</h2>", unsafe_allow_html=True)
 
-# Display websites in a table
+# Display websites as cards
 if st.session_state.websites:
-    # Display table with custom styling
-    st.markdown("""
-    <table class="monitoring-table">
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>URL</th>
-                <th>Interval</th>
-                <th>Status</th>
-                <th>Last Checked</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-    """, unsafe_allow_html=True)
-    
     for site in st.session_state.websites:
-        status_class = "status-active" if site["active"] else "status-inactive"
+        status_class = "active" if site["active"] else "inactive"
         st.markdown(f"""
-        <tr>
-            <td>{site.get('name', site['url'])}</td>
-            <td><span class="url-display">{site['url']}</span></td>
-            <td>{site['interval']}s</td>
-            <td><span class="{status_class}">{"Active" if site["active"] else "Inactive"}</span></td>
-            <td>{site['last_checked'] if site['last_checked'] else 'Never'}</td>
-            <td>
-                <button class="btn-edit" onclick="alert('Use the Edit buttons in the sidebar')">Edit</button>
-                <button class="btn-delete" onclick="alert('Use the Delete button in the sidebar')">Delete</button>
-            </td>
-        </tr>
+        <div class="website-card {status_class}">
+            <h4>{site.get('name', site['url'])}</h4>
+            <p><strong>URL:</strong> <span class="url-display">{site['url']}</span></p>
+            <p><strong>Interval:</strong> {site['interval']} seconds</p>
+            <p><strong>Status:</strong> <span class="status-{'active' if site['active'] else 'inactive'}">{"Active" if site['active'] else 'Inactive'}</span></p>
+            <p><strong>Last Checked:</strong> {site['last_checked'] if site['last_checked'] else 'Never'}</p>
+        </div>
         """, unsafe_allow_html=True)
-    
-    st.markdown("""
-        </tbody>
-    </table>
-    """, unsafe_allow_html=True)
-    
-    # Add Streamlit buttons for each website
-    st.markdown("### Website Actions", unsafe_allow_html=True)
-    for site in st.session_state.websites:
-        col1, col2, col3 = st.columns([3, 1, 1])
+        
+        col1, col2 = st.columns(2)
         with col1:
-            st.write(f"**{site.get('name', site['url'])}** - {site['url']}")
-        with col2:
             if st.button("✏️ Edit", key=f"edit_{site['id']}"):
                 edit_website(site["id"])
                 st.rerun()
-        with col3:
+        with col2:
             if st.button("🗑️ Delete", key=f"delete_{site['id']}"):
                 confirm_delete_website(site["id"])
                 st.rerun()
