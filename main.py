@@ -326,18 +326,19 @@ def extract_stwdo_rooms(content):
     # Process link elements if we haven't found enough rooms
     if len(rooms) < 5:
         for link_element in link_elements:
-            # Check if link_element is a tag (not a NavigableString)
-            if hasattr(link_element, 'get_text'):
+            try:
                 text = link_element.get_text(strip=True)
                 if text and len(text) > 10:
-                    href = link_element.get('href', '') if hasattr(link_element, 'get') else ''
-                    identifier = f"{text[:50]}_{href[:50]}".strip() if href else text[:50].strip()
-                    full_content = f"{text} - {href}"[:300] if href else text[:300]
+                    # Skip href extraction to avoid attribute access issues
+                    identifier = text[:100].strip()
                     rooms.append({
                         "id": hashlib.md5(identifier.encode()).hexdigest()[:12],
                         "content": identifier,
-                        "full_content": full_content
+                        "full_content": text[:300]
                     })
+            except Exception:
+                # Skip elements that cause issues
+                continue
     
     # Remove duplicates based on ID
     unique_rooms = []
