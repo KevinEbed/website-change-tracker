@@ -9,7 +9,8 @@ from email.mime.text import MIMEText
 from datetime import datetime
 import json
 import urllib3
-import pandas as pd
+from bs4 import BeautifulSoup
+import re
 
 # Load environment variables
 load_dotenv()
@@ -192,16 +193,18 @@ def save_websites():
         json.dump(st.session_state.websites, f)
 
 # Add or update website
-def add_or_update_website(url, name, interval, active):
+def add_or_update_website(url, name, interval, active, monitor_type="any_change"):
     website_data = {
         "id": hashlib.md5(url.encode()).hexdigest()[:8],
         "url": url,
         "name": name,
         "interval": interval,
         "active": active,
+        "monitor_type": monitor_type,  # "any_change" or "stwdo_rooms"
         "last_checked": None,
         "last_changed": None,
-        "current_hash": None
+        "current_hash": None,
+        "previous_rooms": []
     }
     
     # Check if website already exists
@@ -238,13 +241,13 @@ def confirm_delete_website(site_id):
     st.session_state.delete_confirm = site_id
 
 # Send email notification
-def send_email_notification(url, site_name):
+def send_email_notification(url, site_name, message=""):
     if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
         return False
         
     try:
         subject = "🔔 Website Change Detected"
-        body = f"A change was detected on the website: {site_name}\nURL: {url}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        body = f"{message}\n\nWebsite: {site_name}\nURL: {url}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         msg = MIMEText(body)
         msg["Subject"] = subject
         msg["From"] = EMAIL_SENDER
@@ -259,20 +262,64 @@ def send_email_notification(url, site_name):
         return False
 
 # Send Telegram notification
-def send_telegram_notification(url, site_name):
+def send_telegram_notification(url, site_name, message=""):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return False
         
     try:
-        message = f"🔔 Change detected on {site_name}\nURL: {url}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        full_message = f"🔔 {message}\n\nWebsite: {site_name}\nURL: {url}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": message}
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": full_message}
         )
         return response.status_code == 200
     except Exception as e:
         print(f"Telegram error: {e}")
         return False
+
+# Extract room information from STWDO website
+def extract_stwdo_rooms(content):
+    soup = BeautifulSoup(content, 'html.parser')
+    rooms = []
+    
+    # Look for room listings - this may need adjustment based on the actual HTML structure
+    room_elements = soup.find_all(['div', 'article', 'li'], class_=re.compile(r'.*(wohnung|zimmer|angebot|room).*', re.I))
+    
+    # Also look for elements containing price information
+    price_elements = soup.find_all(text=re.compile(r'€|EUR|Euro', re.I))
+    
+    # If we find room-related elements, extract information
+    for element in room_elements:
+        # Get text content
+        text = element.get_text(strip=True)
+        if text and len(text) > 20:  # Only consider substantial content
+            # Look for price indicators
+            if '€' in text or 'EUR' in text or 'Euro' in text:
+                rooms.append(text[:200])  # Limit to first 200 chars
+    
+    # If no room elements found, try a different approach
+    if not rooms:
+        # Look for any elements with pricing information
+        for price_element in price_elements:
+            parent = price_element.parent
+            if parent:
+                text = parent.get_text(strip=True)
+                if text and len(text) > 20:
+                    rooms.append(text[:200])
+    
+    return rooms
+
+# Detect new rooms on STWDO website
+def detect_new_rooms(current_content, previous_rooms):
+    current_rooms = extract_stwdo_rooms(current_content)
+    
+    # Find new rooms (in current but not in previous)
+    new_rooms = []
+    for room in current_rooms:
+        if room not in previous_rooms:
+            new_rooms.append(room)
+    
+    return new_rooms, current_rooms
 
 # Load websites on app start
 load_websites()
@@ -305,11 +352,17 @@ with st.sidebar:
             interval = st.number_input("⏱️ Check Interval (seconds):", min_value=30, max_value=3600, 
                                      value=st.session_state.editing_website["interval"], step=30)
             active = st.checkbox("✅ Active", value=st.session_state.editing_website["active"])
+            monitor_type = st.radio("🔍 Monitoring Type:", 
+                                  ["Any Change", "STWDO Room Detection"], 
+                                  index=0 if st.session_state.editing_website.get("monitor_type", "any_change") == "any_change" else 1)
         else:
             url = st.text_input("🔗 Website URL:", placeholder="https://example.com")
             name = st.text_input("📝 Website Name:", placeholder="My Website")
             interval = st.number_input("⏱️ Check Interval (seconds):", min_value=30, max_value=3600, value=60, step=30)
             active = st.checkbox("✅ Active", value=True)
+            monitor_type = st.radio("🔍 Monitoring Type:", 
+                                  ["Any Change", "STWDO Room Detection"], 
+                                  index=0)
         
         # Buttons
         col1, col2, col3 = st.columns(3)
@@ -325,7 +378,8 @@ with st.sidebar:
         if submitted:
             if url and url.strip() != "":
                 name_value = name if name and name.strip() != "" else url
-                add_or_update_website(url, name_value, interval, active)
+                monitor_type_value = "stwdo_rooms" if monitor_type == "STWDO Room Detection" else "any_change"
+                add_or_update_website(url, name_value, interval, active, monitor_type_value)
                 st.success("✅ Website saved successfully!")
                 st.session_state.editing_website = None
                 st.rerun()
@@ -371,6 +425,8 @@ if st.session_state.websites:
         with col1:
             st.markdown(f"<div class='website-info'><span class='info-label'>URL:</span> <span class='info-value'>{site['url']}</span></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='website-info'><span class='info-label'>Interval:</span> <span class='info-value'>{site['interval']} seconds</span></div>", unsafe_allow_html=True)
+            monitor_type_text = "STWDO Room Detection" if site.get("monitor_type") == "stwdo_rooms" else "Any Change"
+            st.markdown(f"<div class='website-info'><span class='info-label'>Monitor Type:</span> <span class='info-value'>{monitor_type_text}</span></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='website-info'><span class='info-label'>Status:</span> <span class='info-value'>{'Active' if site['active'] else 'Inactive'}</span></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='website-info'><span class='info-label'>Last Checked:</span> <span class='info-value'>{site['last_checked'] if site['last_checked'] else 'Never'}</span></div>", unsafe_allow_html=True)
         with col2:
@@ -400,30 +456,58 @@ if st.session_state.websites:
                     response = requests.get(site["url"], timeout=10)
                 
                 content = response.text
-                current_hash = hashlib.md5(content.encode()).hexdigest()
                 
                 # Update last checked time
                 site["last_checked"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 
-                if site.get("current_hash") is None:
-                    site["current_hash"] = current_hash
-                elif current_hash != site["current_hash"]:
-                    # Change detected
-                    site["last_changed"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    site["current_hash"] = current_hash
-                    changes_detected.append(site)
+                if site.get("monitor_type") == "stwdo_rooms" and "stwdo.de" in site["url"]:
+                    # Special handling for STWDO room detection
+                    previous_rooms = site.get("previous_rooms", [])
+                    new_rooms, current_rooms = detect_new_rooms(content, previous_rooms)
                     
-                    # Send notifications
-                    site_name = site.get('name', site['url'])
-                    if enable_email:
-                        send_email_notification(site["url"], site_name)
-                    if enable_telegram:
-                        send_telegram_notification(site["url"], site_name)
+                    if new_rooms:
+                        # New rooms detected
+                        site["last_changed"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        site["previous_rooms"] = current_rooms
+                        changes_detected.append({
+                            "site": site,
+                            "new_rooms": new_rooms
+                        })
+                        
+                        # Send notifications
+                        site_name = site.get('name', site['url'])
+                        message = f"New rooms detected on {site_name}!\n\nNew listings found: {len(new_rooms)}"
+                        if enable_email:
+                            send_email_notification(site["url"], site_name, message)
+                        if enable_telegram:
+                            send_telegram_notification(site["url"], site_name, message)
+                    else:
+                        # Update rooms list even if no new rooms
+                        site["previous_rooms"] = current_rooms
+                else:
+                    # Regular change detection
+                    current_hash = hashlib.md5(content.encode()).hexdigest()
+                    
+                    if site.get("current_hash") is None:
+                        site["current_hash"] = current_hash
+                    elif current_hash != site["current_hash"]:
+                        # Change detected
+                        site["last_changed"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        site["current_hash"] = current_hash
+                        changes_detected.append({"site": site})
+                        
+                        # Send notifications
+                        site_name = site.get('name', site['url'])
+                        message = f"Change detected on {site_name}!"
+                        if enable_email:
+                            send_email_notification(site["url"], site_name, message)
+                        if enable_telegram:
+                            send_telegram_notification(site["url"], site_name, message)
+                        
+                save_websites()
                         
             except Exception as e:
                 print(f"Error checking {site['url']}: {e}")
-        
-        save_websites()
         
         if changes_detected:
             st.success(f"Changes detected on {len(changes_detected)} website(s). Notifications sent.")
@@ -445,6 +529,7 @@ if st.session_state.websites:
     if selected_site:
         placeholder = st.empty()
         prev_hash = selected_site.get("current_hash", None)
+        prev_rooms = selected_site.get("previous_rooms", [])
         refresh_count = 0
         monitoring = True
 
@@ -474,43 +559,62 @@ if st.session_state.websites:
                             response = requests.get(selected_site["url"], timeout=10)
                         
                         content = response.text
+
+                    # Update last checked time
+                    selected_site["last_checked"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    if selected_site.get("monitor_type") == "stwdo_rooms" and "stwdo.de" in selected_site["url"]:
+                        # Special handling for STWDO room detection
+                        new_rooms, current_rooms = detect_new_rooms(content, prev_rooms)
+                        
+                        if new_rooms:
+                            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            # Send notifications only
+                            site_name = selected_site.get('name', selected_site['url'])
+                            message = f"New rooms detected on {site_name}!\n\nNew listings found: {len(new_rooms)}"
+                            if enable_email:
+                                send_email_notification(selected_site["url"], site_name, message)
+                            if enable_telegram:
+                                send_telegram_notification(selected_site["url"], site_name, message)
+                            
+                            # Update website data
+                            selected_site["last_changed"] = timestamp
+                            selected_site["previous_rooms"] = current_rooms
+                            prev_rooms = current_rooms
+                        else:
+                            # Update rooms list even if no new rooms
+                            selected_site["previous_rooms"] = current_rooms
+                            prev_rooms = current_rooms
+                    else:
+                        # Regular change detection
                         current_hash = hashlib.md5(content.encode()).hexdigest()
 
-                    if prev_hash is None:
-                        prev_hash = current_hash
-                        # Update website data
-                        for site in st.session_state.websites:
-                            if site["url"] == selected_site["url"]:
-                                site["last_checked"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                break
-                        save_websites()
+                        if prev_hash is None:
+                            prev_hash = current_hash
 
-                    elif current_hash != prev_hash:
-                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        # Send notifications only
-                        site_name = selected_site.get('name', selected_site['url'])
-                        if enable_email:
-                            email_sent = send_email_notification(selected_site["url"], site_name)
-                        if enable_telegram:
-                            telegram_sent = send_telegram_notification(selected_site["url"], site_name)
-                        
-                        # Update website data
-                        for site in st.session_state.websites:
-                            if site["url"] == selected_site["url"]:
-                                site["last_changed"] = timestamp
-                                site["current_hash"] = current_hash
-                                site["last_checked"] = timestamp
-                                break
-                        save_websites()
-                        prev_hash = current_hash
-                    else:
-                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        # Update website data
-                        for site in st.session_state.websites:
-                            if site["url"] == selected_site["url"]:
-                                site["last_checked"] = timestamp
-                                break
-                        save_websites()
+                        elif current_hash != prev_hash:
+                            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            # Send notifications only
+                            site_name = selected_site.get('name', selected_site['url'])
+                            message = f"Change detected on {site_name}!"
+                            if enable_email:
+                                send_email_notification(selected_site["url"], site_name, message)
+                            if enable_telegram:
+                                send_telegram_notification(selected_site["url"], site_name, message)
+                            
+                            # Update website data
+                            selected_site["last_changed"] = timestamp
+                            selected_site["current_hash"] = current_hash
+                            prev_hash = current_hash
+                        else:
+                            pass  # No change detected
+                    
+                    # Save updated website data
+                    for site in st.session_state.websites:
+                        if site["url"] == selected_site["url"]:
+                            site.update(selected_site)
+                            break
+                    save_websites()
 
                     refresh_count += 1
                     time.sleep(selected_site["interval"])
