@@ -226,13 +226,13 @@ with st.sidebar:
             if url.strip() != "":
                 add_or_update_website(url, name if name.strip() != "" else url, interval, active)
                 st.success("✅ Website saved successfully!")
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("❌ Please enter a valid URL")
         
         if cancel:
             st.session_state.editing_website = None
-            st.experimental_rerun()
+            st.rerun()
     
     # Edit form for existing website
     if st.session_state.editing_website is not None:
