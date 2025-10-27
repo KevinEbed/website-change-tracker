@@ -264,12 +264,14 @@ with st.sidebar:
         with col2:
             cancel = st.form_submit_button("❌ Cancel")
         with col3:
+            delete_button = None
             if st.session_state.editing_website:
-                delete = st.form_submit_button("🗑️ Delete")
+                delete_button = st.form_submit_button("🗑️ Delete")
         
         if submitted:
-            if url.strip() != "":
-                add_or_update_website(url, name if name.strip() != "" else url, interval, active)
+            if url and url.strip() != "":
+                name_value = name if name and name.strip() != "" else url
+                add_or_update_website(url, name_value, interval, active)
                 st.success("✅ Website saved successfully!")
                 st.session_state.editing_website = None
                 st.rerun()
@@ -281,7 +283,7 @@ with st.sidebar:
             st.session_state.delete_confirm = None
             st.rerun()
         
-        if st.session_state.editing_website and 'delete' in locals() and delete:
+        if st.session_state.editing_website and delete_button:
             st.session_state.delete_confirm = st.session_state.editing_website["id"]
             st.rerun()
     
@@ -346,16 +348,17 @@ if st.session_state.websites:
     """, unsafe_allow_html=True)
     
     # Handle form submissions for edit/delete
-    if "edit_site" in st.experimental_get_query_params():
-        site_id = st.experimental_get_query_params()["edit_site"][0]
+    query_params = st.query_params
+    if "edit_site" in query_params:
+        site_id = query_params["edit_site"][0]
         edit_website(site_id)
-        st.experimental_set_query_params()  # Clear query params
+        st.query_params = {}  # Clear query params
         st.rerun()
     
-    if "delete_site" in st.experimental_get_query_params():
-        site_id = st.experimental_get_query_params()["delete_site"][0]
+    if "delete_site" in query_params:
+        site_id = query_params["delete_site"][0]
         st.session_state.delete_confirm = site_id
-        st.experimental_set_query_params()  # Clear query params
+        st.query_params = {}  # Clear query params
         st.rerun()
     
     # Manual check button
