@@ -1,164 +1,218 @@
 import streamlit as st
 import requests
 import hashlib
-import os
-import smtplib
-import threading
 import time
-from datetime import datetime
-from email.mime.text import MIMEText
+import os
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Boolean
-from sqlalchemy.orm import sessionmaker, declarative_base
-
-# -------------------- INITIAL SETUP --------------------
+import smtplib
+from email.mime.text import MIMEText
+from datetime import datetime
+import json
 
 # Load environment variables
 load_dotenv()
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+EMAIL_SENDER = os.getenv("EMAIL_SENDER", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
+EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER", "")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# Database setup
-Base = declarative_base()
-engine = create_engine("sqlite:///urls.db")
-Session = sessionmaker(bind=engine)
-db_session = Session()
+# Set up the page configuration
+st.set_page_config(
+    page_title="Website Change Detector", 
+    layout="wide",
+    page_icon="🌐"
+)
 
+# Custom CSS for better styling
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #4CAF50;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        color: #2196F3;
+        margin-bottom: 1rem;
+    }
+    .notification-card {
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .success {
+        background-color: #E8F5E9;
+        border-left: 4px solid #4CAF50;
+    }
+    .warning {
+        background-color: #FFF3E0;
+        border-left: 4px solid #FF9800;
+    }
+    .error {
+        background-color: #FFEBEE;
+        border-left: 4px solid #F44336;
+    }
+    .info {
+        background-color: #E3F2FD;
+        border-left: 4px solid #2196F3;
+    }
+    .footer {
+        text-align: center;
+        padding: 1rem;
+        color: #757575;
+        font-size: 0.9rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-class URL(Base):
-    __tablename__ = "urls"
-    id = Column(Integer, primary_key=True)
-    link = Column(String(500), nullable=False)
-    monitoring = Column(Boolean, default=False)
-    interval = Column(Integer, default=60)
+# Header section
+st.markdown("<h1 class='main-header'>🌐 Website Change Detector</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #666;'>Monitor websites for changes and get instant notifications</p>", unsafe_allow_html=True)
 
+# Sidebar for settings
+with st.sidebar:
+    st.markdown("<h2 class='sub-header'>⚙️ Settings</h2>", unsafe_allow_html=True)
+    refresh_interval = st.number_input("Check every (seconds)", min_value=30, max_value=3600, value=60, step=30)
+    enable_email = st.checkbox("Enable Email Notifications", value=True)
+    enable_telegram = st.checkbox("Enable Telegram Notifications", value=True)
+    st.markdown("---")
+    st.markdown("<h3 class='sub-header'>📊 Monitoring History</h3>", unsafe_allow_html=True)
+    
+    # Display monitoring history if exists
+    if os.path.exists("monitoring_history.json"):
+        with open("monitoring_history.json", "r") as f:
+            history = json.load(f)
+        for item in history[-5:]:  # Show last 5 items
+            st.markdown(f"<div class='notification-card info'>{item['timestamp']}<br>{item['url']}</div>", unsafe_allow_html=True)
 
-Base.metadata.create_all(engine)
+# Main content area
+url = st.text_input("🔗 Enter the URL to monitor:", value="", placeholder="https://example.com")
 
-# -------------------- UTILITIES --------------------
-
-
-def send_email(subject, body):
+def send_email_notification(url):
+    if not enable_email:
+        return
+        
+    # Check if email credentials are provided
+    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
+        st.warning("📧 Email credentials not configured. Skipping email notification.")
+        return
+        
+    subject = "🔔 Website Change Detected"
+    body = f"The content at {url} has changed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
     msg = MIMEText(body)
+    msg["Subject"] = subject
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
-    msg["Subject"] = subject
+
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
             server.send_message(msg)
-        print("[INFO] Email sent.")
+        st.success("📧 Email notification sent!")
     except Exception as e:
-        print(f"[ERROR] Failed to send email: {e}")
+        st.error(f"❌ Email failed: {e}")
 
-
-def send_telegram(message):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-        requests.post(url, data=payload)
-        print("[INFO] Telegram message sent.")
-    except Exception as e:
-        print(f"[ERROR] Failed to send Telegram message: {e}")
-
-
-def monitor_website(url, url_id, interval):
-    print(f"👀 Monitoring {url}")
-    try:
-        response = requests.get(url, timeout=10)
-        old_hash = hashlib.md5(response.content).hexdigest()
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch initial content: {e}")
+def send_telegram_notification(url):
+    if not enable_telegram:
         return
+        
+    # Check if Telegram credentials are provided
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        st.warning("📩 Telegram credentials not configured. Skipping Telegram notification.")
+        return
+        
+    message = f"🔔 Change detected at {url} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": message}
+        )
+        if response.status_code == 200:
+            st.success("📩 Telegram notification sent!")
+        else:
+            st.warning("⚠️ Telegram message failed to send.")
+    except Exception as e:
+        st.error(f"❌ Telegram error: {e}")
 
-    while True:
-        session = Session()
-        url_obj = session.query(URL).get(url_id)
-        if not url_obj or not url_obj.monitoring:
-            print(f"[INFO] Monitoring stopped for {url}")
-            session.close()
-            break
-
-        try:
-            time.sleep(interval)
-            response = requests.get(url, timeout=10)
-            current_hash = hashlib.md5(response.content).hexdigest()
-            if current_hash != old_hash:
-                print(f"[INFO] Change detected on {url} at {datetime.now()}")
-                message = f"🔔 Change detected on: {url} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                send_email("Website Content Changed", message)
-                send_telegram(message)
-                old_hash = current_hash
-            else:
-                print(f"[DEBUG] No change at {datetime.now()}")
-        except Exception as e:
-            print(f"[ERROR] Error during monitoring: {e}")
-        finally:
-            session.close()
-
-
-# -------------------- STREAMLIT APP --------------------
-
-st.set_page_config(page_title="Website Change Monitor", layout="centered")
-
-# ✅ Fast ping check for uptime bots (cron-job.org, UptimeRobot, etc.)
-query_params = st.query_params
-if "ping" in query_params:
-    st.write("pong")
-    st.stop()
-
-st.title("🔍 Website Change Monitor")
-
-# Ensure threads persist in session
-if "monitoring_threads" not in st.session_state:
-    st.session_state["monitoring_threads"] = {}
-
-monitoring_threads = st.session_state["monitoring_threads"]
-
-# -------------------- ADD URL FORM --------------------
-with st.form("add_url_form"):
-    link = st.text_input("Enter URL")
-    interval = st.number_input("Check every (seconds)", min_value=10, value=60)
-    submitted = st.form_submit_button("➕ Add URL")
-    if submitted and link:
-        new_url = URL(link=link, interval=interval)
-        db_session.add(new_url)
-        db_session.commit()
-        st.success(f"Added {link} with interval {interval}s")
-
-# -------------------- DISPLAY TRACKED URLS --------------------
-urls = db_session.query(URL).all()
-st.subheader("Tracked URLs")
-
-for url in urls:
-    cols = st.columns([4, 1, 1, 1])
-    cols[0].write(f"**{url.link}** ({url.interval}s)")
-    if url.monitoring:
-        cols[0].markdown('<span style="color:green;">Monitoring</span>', unsafe_allow_html=True)
+def save_to_history(url, timestamp):
+    history_file = "monitoring_history.json"
+    if os.path.exists(history_file):
+        with open(history_file, "r") as f:
+            history = json.load(f)
     else:
-        cols[0].markdown('<span style="color:gray;">Idle</span>', unsafe_allow_html=True)
+        history = []
+    
+    history.append({
+        "url": url,
+        "timestamp": timestamp,
+        "hash": hashlib.md5(url.encode()).hexdigest()[:8]
+    })
+    
+    # Keep only last 50 entries
+    if len(history) > 50:
+        history = history[-50:]
+    
+    with open(history_file, "w") as f:
+        json.dump(history, f)
 
-    if cols[1].button("▶️ Start", key=f"start_{url.id}"):
-        if not url.monitoring:
-            url.monitoring = True
-            db_session.commit()
-            thread = threading.Thread(
-                target=monitor_website, args=(url.link, url.id, url.interval), daemon=True
-            )
-            monitoring_threads[url.id] = thread
-            thread.start()
-            st.rerun()
+if url.strip() != "":
+    placeholder = st.empty()
+    prev_hash = None
+    refresh_count = 0
+    monitoring = True
 
-    if cols[2].button("⛔ Stop", key=f"stop_{url.id}"):
-        url.monitoring = False
-        db_session.commit()
-        st.rerun()
+    # Start monitoring button
+    start_button = st.button("▶️ Start Monitoring", key="start")
+    stop_button = st.button("⏹️ Stop Monitoring", key="stop")
+    
+    if start_button:
+        monitoring = True
+        st.session_state.monitoring = True
+    if stop_button:
+        monitoring = False
+        st.session_state.monitoring = False
+        
+    if "monitoring" not in st.session_state:
+        st.session_state.monitoring = False
+        
+    if st.session_state.monitoring:
+        while monitoring:
+            try:
+                with st.spinner(f"🔍 Checking {url} for changes..."):
+                    response = requests.get(url, timeout=10)
+                    content = response.text
+                    current_hash = hashlib.md5(content.encode()).hexdigest()
 
-    if cols[3].button("🗑 Delete", key=f"delete_{url.id}"):
-        url.monitoring = False
-        db_session.delete(url)
-        db_session.commit()
-        st.rerun()
+                if prev_hash is None:
+                    prev_hash = current_hash
+                    placeholder.markdown(f"<div class='notification-card success'>✅ Monitoring started for {url}. Waiting for changes...</div>", unsafe_allow_html=True)
+
+                elif current_hash != prev_hash:
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    st.markdown(f"<div class='notification-card error'>🚨 Change Detected at {timestamp}!</div>", unsafe_allow_html=True)
+                    send_email_notification(url)
+                    send_telegram_notification(url)
+                    save_to_history(url, timestamp)
+                    prev_hash = current_hash
+                else:
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    placeholder.markdown(f"<div class='notification-card info'>🔁 Refresh #{refresh_count + 1} at {timestamp} - No changes detected</div>", unsafe_allow_html=True)
+
+                refresh_count += 1
+                time.sleep(refresh_interval)
+
+            except requests.exceptions.RequestException as e:
+                st.markdown(f"<div class='notification-card error'>❌ Network error while checking the website: {e}</div>", unsafe_allow_html=True)
+                break
+            except Exception as e:
+                st.markdown(f"<div class='notification-card error'>❌ Error while checking the website: {e}</div>", unsafe_allow_html=True)
+                break
+else:
+    st.info("ℹ️ Please enter a URL above to begin monitoring.")
+    
+# Footer
+st.markdown("<div class='footer'>Website Change Detector | Monitor your favorite websites for changes</div>", unsafe_allow_html=True)
