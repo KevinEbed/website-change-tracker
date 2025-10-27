@@ -9,6 +9,7 @@ from email.mime.text import MIMEText
 from datetime import datetime
 import json
 import urllib3
+import pandas as pd
 
 # Load environment variables
 load_dotenv()
@@ -95,20 +96,157 @@ st.markdown("""
         word-break: break-all;
         font-size: 1.05rem;
     }
+    .status-active {
+        background-color: #E8F5E9;
+        color: #2E7D32;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-weight: bold;
+    }
+    .status-inactive {
+        background-color: #FFEBEE;
+        color: #C62828;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-weight: bold;
+    }
+    .monitoring-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .monitoring-table th {
+        background-color: #f5f5f5;
+        text-align: left;
+        padding: 1rem;
+    }
+    .monitoring-table td {
+        padding: 1rem;
+        border-bottom: 1px solid #eee;
+    }
+    .btn-delete {
+        background-color: #f44336;
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 0.25rem;
+        cursor: pointer;
+    }
+    .btn-edit {
+        background-color: #2196F3;
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 0.25rem;
+        cursor: pointer;
+        margin-right: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
+# Initialize session state
+if "websites" not in st.session_state:
+    st.session_state.websites = []
+
+if "editing_website" not in st.session_state:
+    st.session_state.editing_website = None
+
 # Header section
 st.markdown("<h1 class='main-header'>🌐 Website Change Detector</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #666;'>Monitor websites for changes and get instant notifications</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #666;'>Monitor multiple websites for changes and get instant notifications</p>", unsafe_allow_html=True)
 
-# Sidebar for settings
+# Load websites from file
+def load_websites():
+    if os.path.exists("websites.json"):
+        with open("websites.json", "r") as f:
+            st.session_state.websites = json.load(f)
+    else:
+        st.session_state.websites = []
+
+# Save websites to file
+def save_websites():
+    with open("websites.json", "w") as f:
+        json.dump(st.session_state.websites, f)
+
+# Add or update website
+def add_or_update_website(url, name, interval, active):
+    website_data = {
+        "id": hashlib.md5(url.encode()).hexdigest()[:8],
+        "url": url,
+        "name": name,
+        "interval": interval,
+        "active": active,
+        "last_checked": None,
+        "last_changed": None,
+        "current_hash": None
+    }
+    
+    # Check if website already exists
+    existing_index = None
+    for i, site in enumerate(st.session_state.websites):
+        if site["url"] == url:
+            existing_index = i
+            break
+    
+    if existing_index is not None:
+        # Update existing website
+        st.session_state.websites[existing_index] = website_data
+    else:
+        # Add new website
+        st.session_state.websites.append(website_data)
+    
+    save_websites()
+
+# Delete website
+def delete_website(site_id):
+    st.session_state.websites = [site for site in st.session_state.websites if site["id"] != site_id]
+    save_websites()
+
+# Load websites on app start
+load_websites()
+
+# Sidebar for adding/editing websites
 with st.sidebar:
-    st.markdown("<h2 class='sub-header'>⚙️ Settings</h2>", unsafe_allow_html=True)
-    refresh_interval = st.number_input("Check every (seconds)", min_value=30, max_value=3600, value=60, step=30)
+    st.markdown("<h2 class='sub-header'>➕ Add/Edit Website</h2>", unsafe_allow_html=True)
+    
+    # Form for adding/editing websites
+    with st.form("website_form"):
+        url = st.text_input("🔗 Website URL:", placeholder="https://example.com")
+        name = st.text_input("📝 Website Name:", placeholder="My Website")
+        interval = st.number_input("⏱️ Check Interval (seconds):", min_value=30, max_value=3600, value=60, step=30)
+        active = st.checkbox("✅ Active", value=True)
+        
+        # Buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            submitted = st.form_submit_button("💾 Save Website")
+        with col2:
+            cancel = st.form_submit_button("❌ Cancel")
+        
+        if submitted:
+            if url.strip() != "":
+                add_or_update_website(url, name if name.strip() != "" else url, interval, active)
+                st.success("✅ Website saved successfully!")
+                st.experimental_rerun()
+            else:
+                st.error("❌ Please enter a valid URL")
+        
+        if cancel:
+            st.session_state.editing_website = None
+            st.experimental_rerun()
+    
+    # Edit form for existing website
+    if st.session_state.editing_website is not None:
+        site = st.session_state.editing_website
+        st.markdown("---")
+        st.markdown("<h3 class='sub-header'>✏️ Editing Website</h3>", unsafe_allow_html=True)
+        st.write(f"URL: {site['url']}")
+    
+    st.markdown("---")
+    st.markdown("<h3 class='sub-header'>⚙️ Global Settings</h3>", unsafe_allow_html=True)
     enable_email = st.checkbox("Enable Email Notifications", value=True)
     enable_telegram = st.checkbox("Enable Telegram Notifications", value=True)
-    skip_ssl_verification = st.checkbox("Skip SSL Verification (use for sites with certificate issues)", value=False)
+    skip_ssl_verification = st.checkbox("Skip SSL Verification", value=False)
+    
     st.markdown("---")
     st.markdown("<h3 class='sub-header'>📊 Monitoring History</h3>", unsafe_allow_html=True)
     
@@ -120,175 +258,187 @@ with st.sidebar:
             st.markdown(f"<div class='notification-card info'>{item['timestamp']}<br>{item['url']}</div>", unsafe_allow_html=True)
 
 # Main content area
-url = st.text_input("🔗 Enter the URL to monitor:", value="", placeholder="https://example.com")
+st.markdown("<h2 class='sub-header'>📋 Monitored Websites</h2>", unsafe_allow_html=True)
 
-def send_email_notification(url):
-    if not enable_email:
-        return
-        
-    # Check if email credentials are provided
-    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
-        st.warning("📧 Email credentials not configured. Skipping email notification.")
-        return
-        
-    subject = "🔔 Website Change Detected"
-    body = f"The content at {url} has changed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
-        st.success("📧 Email notification sent!")
-    except Exception as e:
-        st.error(f"❌ Email failed: {e}")
-
-def send_telegram_notification(url):
-    if not enable_telegram:
-        return
-        
-    # Check if Telegram credentials are provided
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        st.warning("📩 Telegram credentials not configured. Skipping Telegram notification.")
-        return
-        
-    message = f"🔔 Change detected at {url} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": message}
-        )
-        if response.status_code == 200:
-            st.success("📩 Telegram notification sent!")
-        else:
-            st.warning("⚠️ Telegram message failed to send.")
-    except Exception as e:
-        st.error(f"❌ Telegram error: {e}")
-
-def save_to_history(url, timestamp):
-    history_file = "monitoring_history.json"
-    if os.path.exists(history_file):
-        with open(history_file, "r") as f:
-            history = json.load(f)
-    else:
-        history = []
+# Display websites in a table
+if st.session_state.websites:
+    # Create DataFrame for better display
+    df_data = []
+    for site in st.session_state.websites:
+        df_data.append({
+            "Name": site.get("name", site["url"]),
+            "URL": site["url"],
+            "Interval": f"{site['interval']}s",
+            "Status": "Active" if site["active"] else "Inactive",
+            "Last Checked": site["last_checked"] if site["last_checked"] else "Never",
+            "Actions": site["id"]
+        })
     
-    history.append({
-        "url": url,
-        "timestamp": timestamp,
-        "hash": hashlib.md5(url.encode()).hexdigest()[:8]
-    })
+    df = pd.DataFrame(df_data)
     
-    # Keep only last 50 entries
-    if len(history) > 50:
-        history = history[-50:]
+    # Display table with custom styling
+    st.markdown("""
+    <table class="monitoring-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>URL</th>
+                <th>Interval</th>
+                <th>Status</th>
+                <th>Last Checked</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+    """, unsafe_allow_html=True)
     
-    with open(history_file, "w") as f:
-        json.dump(history, f)
+    for site in st.session_state.websites:
+        status_class = "status-active" if site["active"] else "status-inactive"
+        st.markdown(f"""
+        <tr>
+            <td>{site.get('name', site['url'])}</td>
+            <td><span class="url-display">{site['url']}</span></td>
+            <td>{site['interval']}s</td>
+            <td><span class="{status_class}">{"Active" if site["active"] else "Inactive"}</span></td>
+            <td>{site['last_checked'] if site['last_checked'] else 'Never'}</td>
+            <td>
+                <button class="btn-edit" onclick="alert('Edit functionality would go here')">Edit</button>
+                <button class="btn-delete" onclick="alert('Delete functionality would go here')">Delete</button>
+            </td>
+        </tr>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("""
+        </tbody>
+    </table>
+    """, unsafe_allow_html=True)
+    
+    # Manual check button
+    if st.button("🔍 Check All Websites Now"):
+        st.info("Manual check functionality would be implemented here")
+else:
+    st.info("ℹ️ No websites are currently being monitored. Add a website using the form in the sidebar.")
 
-if url.strip() != "":
-    placeholder = st.empty()
-    prev_hash = None
-    refresh_count = 0
-    monitoring = True
+# Individual website monitoring section
+st.markdown("---")
+st.markdown("<h2 class='sub-header'>🎯 Monitor Specific Website</h2>", unsafe_allow_html=True)
 
-    # Start monitoring button
-    start_button = st.button("▶️ Start Monitoring", key="start")
-    stop_button = st.button("⏹️ Stop Monitoring", key="stop")
+# Select website to monitor
+if st.session_state.websites:
+    website_options = {site.get("name", site["url"]): site for site in st.session_state.websites}
+    selected_name = st.selectbox("Select a website to monitor:", list(website_options.keys()))
+    selected_site = website_options[selected_name]
     
-    if start_button:
+    if selected_site:
+        placeholder = st.empty()
+        prev_hash = selected_site.get("current_hash", None)
+        refresh_count = 0
         monitoring = True
-        st.session_state.monitoring = True
-    if stop_button:
-        monitoring = False
-        st.session_state.monitoring = False
+
+        # Start monitoring button
+        start_button = st.button("▶️ Start Monitoring", key="start")
+        stop_button = st.button("⏹️ Stop Monitoring", key="stop")
         
-    if "monitoring" not in st.session_state:
-        st.session_state.monitoring = False
-        
-    if st.session_state.monitoring:
-        while monitoring:
-            try:
-                with st.spinner(f"🔍 Checking {url} for changes..."):
-                    # Configure request based on SSL setting
-                    if skip_ssl_verification:
-                        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-                        response = requests.get(url, timeout=10, verify=False)
+        if start_button:
+            monitoring = True
+            st.session_state.monitoring = True
+        if stop_button:
+            monitoring = False
+            st.session_state.monitoring = False
+            
+        if "monitoring" not in st.session_state:
+            st.session_state.monitoring = False
+            
+        if st.session_state.monitoring:
+            while monitoring:
+                try:
+                    with st.spinner(f"🔍 Checking {selected_site['url']} for changes..."):
+                        # Configure request based on SSL setting
+                        if skip_ssl_verification:
+                            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                            response = requests.get(selected_site["url"], timeout=10, verify=False)
+                        else:
+                            response = requests.get(selected_site["url"], timeout=10)
+                        
+                        content = response.text
+                        current_hash = hashlib.md5(content.encode()).hexdigest()
+
+                    if prev_hash is None:
+                        prev_hash = current_hash
+                        placeholder.markdown(f"""
+                        <div class='notification-card highlight'>
+                            ✅ Monitoring started successfully!<br>
+                            <span class='url-display'>{selected_site['url']}</span><br>
+                            Waiting for changes...
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    elif current_hash != prev_hash:
+                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        st.markdown(f"""
+                        <div class='notification-card error'>
+                            🚨 Change Detected at {timestamp}!<br>
+                            <span class='url-display'>{selected_site['url']}</span><br>
+                            Content has been modified.
+                        </div>
+                        """, unsafe_allow_html=True)
+                        # Update website data
+                        for site in st.session_state.websites:
+                            if site["url"] == selected_site["url"]:
+                                site["last_changed"] = timestamp
+                                site["current_hash"] = current_hash
+                                break
+                        save_websites()
+                        prev_hash = current_hash
                     else:
-                        response = requests.get(url, timeout=10)
-                    
-                    content = response.text
-                    current_hash = hashlib.md5(content.encode()).hexdigest()
+                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        placeholder.markdown(f"""
+                        <div class='notification-card info'>
+                            🔁 Refresh #{refresh_count + 1} at {timestamp}<br>
+                            <span class='url-display'>{selected_site['url']}</span><br>
+                            No changes detected.
+                        </div>
+                        """, unsafe_allow_html=True)
+                        # Update website data
+                        for site in st.session_state.websites:
+                            if site["url"] == selected_site["url"]:
+                                site["last_checked"] = timestamp
+                                break
+                        save_websites()
 
-                if prev_hash is None:
-                    prev_hash = current_hash
-                    placeholder.markdown(f"""
-                    <div class='notification-card highlight'>
-                        ✅ Monitoring started successfully!<br>
-                        <span class='url-display'>{url}</span><br>
-                        Waiting for changes...
-                    </div>
-                    """, unsafe_allow_html=True)
+                    refresh_count += 1
+                    time.sleep(selected_site["interval"])
 
-                elif current_hash != prev_hash:
-                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                except requests.exceptions.SSLError as e:
+                    error_msg = f"🔒 SSL Certificate Error: {str(e)}"
                     st.markdown(f"""
                     <div class='notification-card error'>
-                        🚨 Change Detected at {timestamp}!<br>
-                        <span class='url-display'>{url}</span><br>
-                        Content has been modified.
+                        {error_msg}<br>
+                        <span class='url-display'>{selected_site['url']}</span>
                     </div>
                     """, unsafe_allow_html=True)
-                    send_email_notification(url)
-                    send_telegram_notification(url)
-                    save_to_history(url, timestamp)
-                    prev_hash = current_hash
-                else:
-                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    placeholder.markdown(f"""
-                    <div class='notification-card info'>
-                        🔁 Refresh #{refresh_count + 1} at {timestamp}<br>
-                        <span class='url-display'>{url}</span><br>
-                        No changes detected.
+                    st.info("💡 Tip: Try enabling 'Skip SSL Verification' in settings if this is a known issue with the website.")
+                    break
+                except requests.exceptions.RequestException as e:
+                    st.markdown(f"""
+                    <div class='notification-card error'>
+                        ❌ Network error while checking the website:<br>
+                        <span class='url-display'>{selected_site['url']}</span><br>
+                        Error: {e}
                     </div>
                     """, unsafe_allow_html=True)
-
-                refresh_count += 1
-                time.sleep(refresh_interval)
-
-            except requests.exceptions.SSLError as e:
-                error_msg = f"🔒 SSL Certificate Error: {str(e)}"
-                st.markdown(f"""
-                <div class='notification-card error'>
-                    {error_msg}<br>
-                    <span class='url-display'>{url}</span>
-                </div>
-                """, unsafe_allow_html=True)
-                st.info("💡 Tip: Try enabling 'Skip SSL Verification' in settings if this is a known issue with the website.")
-                break
-            except requests.exceptions.RequestException as e:
-                st.markdown(f"""
-                <div class='notification-card error'>
-                    ❌ Network error while checking the website:<br>
-                    <span class='url-display'>{url}</span><br>
-                    Error: {e}
-                </div>
-                """, unsafe_allow_html=True)
-                break
-            except Exception as e:
-                st.markdown(f"""
-                <div class='notification-card error'>
-                    ❌ Error while checking the website:<br>
-                    <span class='url-display'>{url}</span><br>
-                    Error: {e}
-                </div>
-                """, unsafe_allow_html=True)
-                break
+                    break
+                except Exception as e:
+                    st.markdown(f"""
+                    <div class='notification-card error'>
+                        ❌ Error while checking the website:<br>
+                        <span class='url-display'>{selected_site['url']}</span><br>
+                        Error: {e}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    break
 else:
-    st.info("ℹ️ Please enter a URL above to begin monitoring.")
-    
+    st.info("ℹ️ Add websites using the form in the sidebar to begin monitoring.")
+
 # Footer
 st.markdown("<div class='footer'>Website Change Detector | Monitor your favorite websites for changes</div>", unsafe_allow_html=True)
