@@ -288,6 +288,42 @@ def send_telegram_notification(url, site_name, message=""):
 
 # Extract room information from STWDO website
 def extract_stwdo_rooms(content):
+    # If BeautifulSoup is not available, use a simpler approach
+    if not BEAUTIFUL_SOUP_AVAILABLE or BeautifulSoup is None:
+        # Simple regex-based extraction
+        rooms = []
+        # Look for patterns that might indicate room listings
+        patterns = [
+            r'Wohnung.*?\d+.*?€',
+            r'Zimmer.*?\d+.*?€',
+            r'Angebot.*?\d+.*?€',
+            r'€.*?\d+.*?(Wohnung|Zimmer|Angebot)',
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, content, re.IGNORECASE | re.DOTALL)
+            for match in matches:
+                if isinstance(match, tuple):
+                    match = ' '.join(match)
+                identifier = match[:100].strip()
+                if len(identifier) > 10:  # Only consider substantial content
+                    rooms.append({
+                        "id": hashlib.md5(identifier.encode()).hexdigest()[:12],
+                        "content": identifier,
+                        "full_content": match[:300]
+                    })
+        
+        # Remove duplicates based on ID
+        unique_rooms = []
+        seen_ids = set()
+        for room in rooms:
+            if room["id"] not in seen_ids:
+                unique_rooms.append(room)
+                seen_ids.add(room["id"])
+        
+        return unique_rooms
+    
+    # If BeautifulSoup is available, use the more sophisticated approach
     soup = BeautifulSoup(content, 'html.parser')
     rooms = []
     
