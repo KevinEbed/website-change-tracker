@@ -221,12 +221,17 @@ def edit_website(site_id):
             st.session_state.editing_website = site
             break
 
+# Delete website - set delete confirmation
+def confirm_delete_website(site_id):
+    st.session_state.delete_confirm = site_id
+
 # Load websites on app start
 load_websites()
 
 # Handle delete confirmation
 if st.session_state.delete_confirm:
     site_to_delete = st.session_state.delete_confirm
+    st.warning(f"Are you sure you want to delete this website?")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("✅ Confirm Delete"):
@@ -284,7 +289,7 @@ with st.sidebar:
             st.rerun()
         
         if st.session_state.editing_website and delete_button:
-            st.session_state.delete_confirm = st.session_state.editing_website["id"]
+            confirm_delete_website(st.session_state.editing_website["id"])
             st.rerun()
     
     st.markdown("---")
@@ -334,10 +339,8 @@ if st.session_state.websites:
             <td><span class="{status_class}">{"Active" if site["active"] else "Inactive"}</span></td>
             <td>{site['last_checked'] if site['last_checked'] else 'Never'}</td>
             <td>
-                <form method="post">
-                    <button class="btn-edit" name="edit_site" value="{site['id']}">Edit</button>
-                    <button class="btn-delete" name="delete_site" value="{site['id']}">Delete</button>
-                </form>
+                <button class="btn-edit" onclick="alert('Use the Edit buttons in the sidebar')">Edit</button>
+                <button class="btn-delete" onclick="alert('Use the Delete button in the sidebar')">Delete</button>
             </td>
         </tr>
         """, unsafe_allow_html=True)
@@ -347,19 +350,20 @@ if st.session_state.websites:
     </table>
     """, unsafe_allow_html=True)
     
-    # Handle form submissions for edit/delete
-    query_params = st.query_params
-    if "edit_site" in query_params:
-        site_id = query_params["edit_site"][0]
-        edit_website(site_id)
-        st.query_params = {}  # Clear query params
-        st.rerun()
-    
-    if "delete_site" in query_params:
-        site_id = query_params["delete_site"][0]
-        st.session_state.delete_confirm = site_id
-        st.query_params = {}  # Clear query params
-        st.rerun()
+    # Add Streamlit buttons for each website
+    st.markdown("### Website Actions", unsafe_allow_html=True)
+    for site in st.session_state.websites:
+        col1, col2, col3 = st.columns([3, 1, 1])
+        with col1:
+            st.write(f"**{site.get('name', site['url'])}** - {site['url']}")
+        with col2:
+            if st.button("✏️ Edit", key=f"edit_{site['id']}"):
+                edit_website(site["id"])
+                st.rerun()
+        with col3:
+            if st.button("🗑️ Delete", key=f"delete_{site['id']}"):
+                confirm_delete_website(site["id"])
+                st.rerun()
     
     # Manual check button
     if st.button("🔍 Check All Websites Now"):
