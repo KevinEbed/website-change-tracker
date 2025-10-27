@@ -8,6 +8,7 @@ import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
 import json
+import urllib3
 
 # Load environment variables
 load_dotenv()
@@ -79,6 +80,7 @@ with st.sidebar:
     refresh_interval = st.number_input("Check every (seconds)", min_value=30, max_value=3600, value=60, step=30)
     enable_email = st.checkbox("Enable Email Notifications", value=True)
     enable_telegram = st.checkbox("Enable Telegram Notifications", value=True)
+    skip_ssl_verification = st.checkbox("Skip SSL Verification (use for sites with certificate issues)", value=False)
     st.markdown("---")
     st.markdown("<h3 class='sub-header'>📊 Monitoring History</h3>", unsafe_allow_html=True)
     
@@ -183,7 +185,13 @@ if url.strip() != "":
         while monitoring:
             try:
                 with st.spinner(f"🔍 Checking {url} for changes..."):
-                    response = requests.get(url, timeout=10)
+                    # Configure request based on SSL setting
+                    if skip_ssl_verification:
+                        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                        response = requests.get(url, timeout=10, verify=False)
+                    else:
+                        response = requests.get(url, timeout=10)
+                    
                     content = response.text
                     current_hash = hashlib.md5(content.encode()).hexdigest()
 
@@ -205,6 +213,11 @@ if url.strip() != "":
                 refresh_count += 1
                 time.sleep(refresh_interval)
 
+            except requests.exceptions.SSLError as e:
+                error_msg = f"🔒 SSL Certificate Error: {str(e)}"
+                st.markdown(f"<div class='notification-card error'>{error_msg}</div>", unsafe_allow_html=True)
+                st.info("💡 Tip: Try enabling 'Skip SSL Verification' in settings if this is a known issue with the website.")
+                break
             except requests.exceptions.RequestException as e:
                 st.markdown(f"<div class='notification-card error'>❌ Network error while checking the website: {e}</div>", unsafe_allow_html=True)
                 break
